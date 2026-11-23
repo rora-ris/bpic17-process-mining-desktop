@@ -1,0 +1,2 @@
+﻿case_id,cancelled_trace_pos,cancelled_timestamp,cancelled_offer_id,accepted_trace_pos,accepted_timestamp,accepted_offer_id,intervening_events_count,time_between_days,trace_end_activity,case_duration_days
+CASE_08_CANCELLED_THEN_OTHER_THEN_ACCEPTED,2,2026-01-04 08:00:00+00:00,Off_8A,4,2026-01-13 08:00:00+00:00,Off_8B,1,9.0,O_Accepted,12.0

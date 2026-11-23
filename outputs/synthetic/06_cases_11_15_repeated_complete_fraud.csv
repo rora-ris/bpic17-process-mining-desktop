@@ -1,0 +1,4 @@
+﻿case_id,complete_occurrences,all_lifecycle_occurrences,resources_involved,unique_valid_resources,first_complete_time,last_complete_time,case_total_events,case_duration_days
+CASE_05_FRAUD_TWO_COMPLETE_DIFF_RESOURCE,2,2,"User_A, User_B",2,2026-01-03 08:00:00+00:00,2026-01-06 08:00:00+00:00,3,5.0
+CASE_06_FRAUD_TWO_COMPLETE_SAME_RESOURCE,2,2,"User_X, User_X",1,2026-01-04 08:00:00+00:00,2026-01-08 08:00:00+00:00,3,7.0
+CASE_07_FRAUD_TWO_COMPLETE_EMPTY_RESOURCE,2,2,", ",0,2026-01-02 08:00:00+00:00,2026-01-04 08:00:00+00:00,3,3.0

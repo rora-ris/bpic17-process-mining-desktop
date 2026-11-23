@@ -1,0 +1,2 @@
+﻿case_id,resource_id,same_resource_completions,total_case_completions,first_complete_time,last_complete_time,evidence_event_ids,case_duration_days
+CASE_06_FRAUD_TWO_COMPLETE_SAME_RESOURCE,User_X,2,2,2026-01-04 08:00:00+00:00,2026-01-08 08:00:00+00:00,"E06_2, E06_3",7.0

@@ -1,0 +1,7 @@
+﻿lifecycle:transition,time:timestamp,case:concept:name,OfferID,concept:name,org:resource,EventID,_event_idx,_trace_pos
+complete,2026-01-03 08:00:00+00:00,CASE_05_FRAUD_TWO_COMPLETE_DIFF_RESOURCE,,W_Assess potential fraud,User_A,E05_2,15,2
+complete,2026-01-06 08:00:00+00:00,CASE_05_FRAUD_TWO_COMPLETE_DIFF_RESOURCE,,W_Assess potential fraud,User_B,E05_3,16,3
+complete,2026-01-04 08:00:00+00:00,CASE_06_FRAUD_TWO_COMPLETE_SAME_RESOURCE,,W_Assess potential fraud,User_X,E06_2,18,2
+complete,2026-01-08 08:00:00+00:00,CASE_06_FRAUD_TWO_COMPLETE_SAME_RESOURCE,,W_Assess potential fraud,User_X,E06_3,19,3
+complete,2026-01-02 08:00:00+00:00,CASE_07_FRAUD_TWO_COMPLETE_EMPTY_RESOURCE,,W_Assess potential fraud,,E07_2,21,2
+complete,2026-01-04 08:00:00+00:00,CASE_07_FRAUD_TWO_COMPLETE_EMPTY_RESOURCE,,W_Assess potential fraud,,E07_3,22,3

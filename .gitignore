@@ -1,0 +1,57 @@
+# ==========================================================
+# 1. Python Virtual Environments, Bytecode & Test Caches
+# ==========================================================
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# ==========================================================
+# 2. Sensitive Files, Secrets, Credentials & Private Keys
+# ==========================================================
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*secret*
+*credentials*
+config.local.*
+settings.local.*
+
+# ==========================================================
+# 3. Large Dataset BPIC17 (Ketentuan Bagian 10 Butir 6:
+#    "Tidak perlu melampirkan kembali salinan dataset BPIC17
+#     apabila ukuran berkas terlalu besar; cukup berikan
+#     sumber dan versi data yang digunakan.")
+# ==========================================================
+BPI Challenge 2017.xes.gz
+BPI Challenge 2017.xes
+*.xes.gz
+
+# Keep small synthetic edge-case XES log for unit testing:
+!data/synthetic_edge_cases.xes
+
+# ==========================================================
+# 4. IDE, OS, and Local Instructional PDFs
+# ==========================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+Desktop.ini
+Instruksi_Proyek_Tahap_1_Analisis_Soal_BPIC17_PM4Py.pdf

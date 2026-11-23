@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Laporan Analisis Event Log BPIC17 — Bab 11 FBPM</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f8fafc; color: #0f172a; margin: 24px; line-height: 1.5; }
+  h1 { color: #1e3a8a; border-bottom: 2px solid #cbd5e1; padding-bottom: 8px; }
+  h2 { color: #1e40af; margin-top: 28px; }
+  .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+  .table th { background: #1e3a8a; color: #ffffff; text-align: left; padding: 8px 10px; }
+  .table td { border-bottom: 1px solid #e2e8f0; padding: 7px 10px; }
+  .table tr:nth-child(even) { background: #f1f5f9; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #dbeafe; color: #1e40af; font-weight: 600; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>Laporan Analisis Event Log BPIC17 (Latihan Bab 11 FBPM)</h1>
+  <div class="card">
+    <p><strong>Berkas Dataset:</strong> synthetic_edge_cases.xes (0.01 MB) |
+       <strong>Total Case:</strong> 10 |
+       <strong>Total Event:</strong> 32 |
+       <strong>Waktu Ekspor:</strong> 2026-11-23 14:51:56</p>
+    <p><strong>Lingkungan Reproduktibilitas:</strong> Python 3.11.9, PM4Py 2.7.23.14, Pandas 3.1.1, PySide6 6.12.0</p>
+  </div>
+
+  <h2>1. Ringkasan Jawaban Wajib (Exercise 11.7 A–E, 11.15, 11.18, 11.22)</h2>
+  <div class="card">
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Kode Soal</th>
+      <th>Pertanyaan</th>
+      <th>Aturan / Filter</th>
+      <th>Jumlah Case Terpilih</th>
+      <th>Denominator (Total Case Aktif)</th>
+      <th>Persentase Case (%)</th>
+      <th>Mean Cycle Time (Hari)</th>
+      <th>Mean Cycle Time (Jam)</th>
+      <th>Median Cycle Time (Hari)</th>
+      <th>Jawaban Utama</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>11.7 A</td>
+      <td>Berapa jumlah keseluruhan case?</td>
+      <td>Hitung seluruh unique case/trace dari keseluruhan event log aktif.</td>
+      <td>10</td>
+      <td>10</td>
+      <td>100.0</td>
+      <td>6.90</td>
+      <td>165.6</td>
+      <td>6.5</td>
+      <td>10 case</td>
+    </tr>
+    <tr>
+      <td>11.7 B</td>
+      <td>Berapa rata-rata cycle time seluruh case?</td>
+      <td>Durasi tiap case = timestamp event terakhir dikurangi event pertama pada trace; dihitung rata-ratanya dalam satuan hari.</td>
+      <td>10</td>
+      <td>10</td>
+      <td>100.0</td>
+      <td>6.90</td>
+      <td>165.6</td>
+      <td>6.5</td>
+      <td>6.90 hari (6.9000 hari)</td>
+    </tr>
+    <tr>
+      <td>11.7 C</td>
+      <td>Berapa successful cases dan rata-rata cycle time-nya?</td>
+      <td>Contains Filter: Case memuat setidaknya satu event 'O_Accepted' (dihitung 1x per case meskipun O_Accepted muncul &gt;1x).</td>
+      <td>4</td>
+      <td>10</td>
+      <td>40.0</td>
+      <td>9.75</td>
+      <td>234.0</td>
+      <td>9.5</td>
+      <td>4 case (40.00%), Mean = 9.75 hari</td>
+    </tr>
+    <tr>
+      <td>11.7 D</td>
+      <td>Berapa unsuccessful cases dan rata-rata cycle time-nya?</td>
+      <td>Contains Filter: Case memuat setidaknya satu event 'O_Refused' (tidak dipaksa saling eksklusif dengan 11.7 C).</td>
+      <td>1</td>
+      <td>10</td>
+      <td>10.0</td>
+      <td>8.00</td>
+      <td>192.0</td>
+      <td>8.0</td>
+      <td>1 case (10.00%), Mean = 8.00 hari</td>
+    </tr>
+    <tr>
+      <td>11.7 E</td>
+      <td>Berapa canceled cases dan rata-rata cycle time-nya?</td>
+      <td>Endpoint Filter: Event TERAKHIR pada urutan trace adalah 'O_Cancelled' (case dengan O_Cancelled di tengah trace tetapi diikuti event lain tidak lolos).</td>
+      <td>2</td>
+      <td>10</td>
+      <td>20.0</td>
+      <td>7.00</td>
+      <td>168.0</td>
+      <td>7.0</td>
+      <td>2 case (20.00%), Mean = 7.00 hari</td>
+    </tr>
+    <tr>
+      <td>11.15</td>
+      <td>Berapa case dengan W_Assess Potential Fraud selesai minimal 2x?</td>
+      <td>Pilih case dengan aktivitas 'W_Assess potential fraud' berstatus lifecycle:transition == 'complete' sebanyak minimal 2 kali dalam satu trace.</td>
+      <td>3</td>
+      <td>10</td>
+      <td>30.0</td>
+      <td>5.00</td>
+      <td>120.0</td>
+      <td>5.0</td>
+      <td>3 case (30.0000%)</td>
+    </tr>
+    <tr>
+      <td>11.18</td>
+      <td>Berapa case dengan W_Assess Potential Fraud selesai minimal 2x oleh resource yang sama?</td>
+      <td>Pilih case dengan aktivitas 'W_Assess potential fraud' berstatus lifecycle:transition == 'complete' yang diselesaikan minimal 2 kali oleh org:resource yang SAMA (resource kosong/tidak valid diabaikan).</td>
+      <td>1</td>
+      <td>10</td>
+      <td>10.0</td>
+      <td>7.00</td>
+      <td>168.0</td>
+      <td>7.0</td>
+      <td>1 case (10.0000%)</td>
+    </tr>
+    <tr>
+      <td>11.22</td>
+      <td>Adakah O_Cancelled yang kemudian diikuti O_Accepted? Berapa persentase case-nya?</td>
+      <td>Eventually Follows Filter (Level Trace/Case): Terdapat pasangan posisi i &lt; j dalam satu trace di mana event ke-i adalah 'O_Cancelled' dan event ke-j adalah 'O_Accepted' (kedua event tidak harus bersebelahan). Persentase = (Jumlah Case Cocok / 10) × 100%.</td>
+      <td>1</td>
+      <td>10</td>
+      <td>10.0</td>
+      <td>12.00</td>
+      <td>288.0</td>
+      <td>12.0</td>
+      <td>Ya, ada 1 dari 10 case (10.00% / 10.0000%)</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+
+  <h2>2. Bukti Case Exercise 11.15 (W_Assess potential fraud &ge; 2x complete)</h2>
+  <div class="card">
+    <p><span class="badge">Aturan Filter</span> Pilih case dengan aktivitas 'W_Assess potential fraud' berstatus lifecycle:transition == 'complete' sebanyak minimal 2 kali dalam satu trace.</p>
+    <p>Jumlah case dengan &ge; 2 event semua lifecycle: <strong>4</strong> case |
+       Jumlah case dengan &ge; 2 event <code>complete</code>: <strong>3</strong> case (tereliminasi oleh filter lifecycle complete: 1 case).</p>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>case_id</th>
+      <th>complete_occurrences</th>
+      <th>all_lifecycle_occurrences</th>
+      <th>resources_involved</th>
+      <th>unique_valid_resources</th>
+      <th>first_complete_time</th>
+      <th>last_complete_time</th>
+      <th>case_total_events</th>
+      <th>case_duration_days</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>CASE_05_FRAUD_TWO_COMPLETE_DIFF_RESOURCE</td>
+      <td>2</td>
+      <td>2</td>
+      <td>User_A, User_B</td>
+      <td>2</td>
+      <td>2026-01-03 08:00:00+00:00</td>
+      <td>2026-01-06 08:00:00+00:00</td>
+      <td>3</td>
+      <td>5.0</td>
+    </tr>
+    <tr>
+      <td>CASE_06_FRAUD_TWO_COMPLETE_SAME_RESOURCE</td>
+      <td>2</td>
+      <td>2</td>
+      <td>User_X, User_X</td>
+      <td>1</td>
+      <td>2026-01-04 08:00:00+00:00</td>
+      <td>2026-01-08 08:00:00+00:00</td>
+      <td>3</td>
+      <td>7.0</td>
+    </tr>
+    <tr>
+      <td>CASE_07_FRAUD_TWO_COMPLETE_EMPTY_RESOURCE</td>
+      <td>2</td>
+      <td>2</td>
+      <td>,</td>
+      <td>0</td>
+      <td>2026-01-02 08:00:00+00:00</td>
+      <td>2026-01-04 08:00:00+00:00</td>
+      <td>3</td>
+      <td>3.0</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+
+  <h2>3. Bukti Case Exercise 11.18 (W_Assess potential fraud &ge; 2x complete oleh Resource Sama)</h2>
+  <div class="card">
+    <p><span class="badge">Aturan Filter</span> Pilih case dengan aktivitas 'W_Assess potential fraud' berstatus lifecycle:transition == 'complete' yang diselesaikan minimal 2 kali oleh org:resource yang SAMA (resource kosong/tidak valid diabaikan).</p>
+    <p>Case lolos 11.15 namun dilakukan oleh resource berbeda: <strong>2</strong> case (CASE_05_FRAUD_TWO_COMPLETE_DIFF_RESOURCE, CASE_07_FRAUD_TWO_COMPLETE_EMPTY_RESOURCE).</p>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>case_id</th>
+      <th>resource_id</th>
+      <th>same_resource_completions</th>
+      <th>total_case_completions</th>
+      <th>first_complete_time</th>
+      <th>last_complete_time</th>
+      <th>evidence_event_ids</th>
+      <th>case_duration_days</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>CASE_06_FRAUD_TWO_COMPLETE_SAME_RESOURCE</td>
+      <td>User_X</td>
+      <td>2</td>
+      <td>2</td>
+      <td>2026-01-04 08:00:00+00:00</td>
+      <td>2026-01-08 08:00:00+00:00</td>
+      <td>E06_2, E06_3</td>
+      <td>7.0</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+
+  <h2>4. Bukti Case Exercise 11.22 (O_Cancelled diikuti O_Accepted — 25 Sampel Pertama)</h2>
+  <div class="card">
+    <p><span class="badge">Aturan Filter</span> Eventually Follows Filter (Level Trace/Case): Terdapat pasangan posisi i < j dalam satu trace di mana event ke-i adalah 'O_Cancelled' dan event ke-j adalah 'O_Accepted' (kedua event tidak harus bersebelahan). Persentase = (Jumlah Case Cocok / 10) × 100%.</p>
+    <p>Total Case Cocok: <strong>1</strong> dari <strong>10</strong> case (<strong>10.00%</strong> / 10.0000%).</p>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>case_id</th>
+      <th>cancelled_trace_pos</th>
+      <th>cancelled_timestamp</th>
+      <th>cancelled_offer_id</th>
+      <th>accepted_trace_pos</th>
+      <th>accepted_timestamp</th>
+      <th>accepted_offer_id</th>
+      <th>intervening_events_count</th>
+      <th>time_between_days</th>
+      <th>trace_end_activity</th>
+      <th>case_duration_days</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>CASE_08_CANCELLED_THEN_OTHER_THEN_ACCEPTED</td>
+      <td>2</td>
+      <td>2026-01-04 08:00:00+00:00</td>
+      <td>Off_8A</td>
+      <td>4</td>
+      <td>2026-01-13 08:00:00+00:00</td>
+      <td>Off_8B</td>
+      <td>1</td>
+      <td>9.0</td>
+      <td>O_Accepted</td>
+      <td>12.0</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+</body>
+</html>

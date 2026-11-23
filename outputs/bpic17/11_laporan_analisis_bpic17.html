@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Laporan Analisis Event Log BPIC17 — Bab 11 FBPM</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f8fafc; color: #0f172a; margin: 24px; line-height: 1.5; }
+  h1 { color: #1e3a8a; border-bottom: 2px solid #cbd5e1; padding-bottom: 8px; }
+  h2 { color: #1e40af; margin-top: 28px; }
+  .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+  .table th { background: #1e3a8a; color: #ffffff; text-align: left; padding: 8px 10px; }
+  .table td { border-bottom: 1px solid #e2e8f0; padding: 7px 10px; }
+  .table tr:nth-child(even) { background: #f1f5f9; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #dbeafe; color: #1e40af; font-weight: 600; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>Laporan Analisis Event Log BPIC17 (Latihan Bab 11 FBPM)</h1>
+  <div class="card">
+    <p><strong>Berkas Dataset:</strong> BPI Challenge 2017.xes.gz (28.28 MB) |
+       <strong>Total Case:</strong> 31,509 |
+       <strong>Total Event:</strong> 1,202,267 |
+       <strong>Waktu Ekspor:</strong> 2026-11-23 14:52:08</p>
+    <p><strong>Lingkungan Reproduktibilitas:</strong> Python 3.11.9, PM4Py 2.7.23.14, Pandas 3.1.1, PySide6 6.12.0</p>
+  </div>
+
+  <h2>1. Ringkasan Jawaban Wajib (Exercise 11.7 A–E, 11.15, 11.18, 11.22)</h2>
+  <div class="card">
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Kode Soal</th>
+      <th>Pertanyaan</th>
+      <th>Aturan / Filter</th>
+      <th>Jumlah Case Terpilih</th>
+      <th>Denominator (Total Case Aktif)</th>
+      <th>Persentase Case (%)</th>
+      <th>Mean Cycle Time (Hari)</th>
+      <th>Mean Cycle Time (Jam)</th>
+      <th>Median Cycle Time (Hari)</th>
+      <th>Jawaban Utama</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>11.7 A</td>
+      <td>Berapa jumlah keseluruhan case?</td>
+      <td>Hitung seluruh unique case/trace dari keseluruhan event log aktif.</td>
+      <td>31509</td>
+      <td>31509</td>
+      <td>100.0000</td>
+      <td>21.8996</td>
+      <td>525.59</td>
+      <td>19.0877</td>
+      <td>31,509 case</td>
+    </tr>
+    <tr>
+      <td>11.7 B</td>
+      <td>Berapa rata-rata cycle time seluruh case?</td>
+      <td>Durasi tiap case = timestamp event terakhir dikurangi event pertama pada trace; dihitung rata-ratanya dalam satuan hari.</td>
+      <td>31509</td>
+      <td>31509</td>
+      <td>100.0000</td>
+      <td>21.8996</td>
+      <td>525.59</td>
+      <td>19.0877</td>
+      <td>21.90 hari (21.8996 hari)</td>
+    </tr>
+    <tr>
+      <td>11.7 C</td>
+      <td>Berapa successful cases dan rata-rata cycle time-nya?</td>
+      <td>Contains Filter: Case memuat setidaknya satu event 'O_Accepted' (dihitung 1x per case meskipun O_Accepted muncul &gt;1x).</td>
+      <td>17228</td>
+      <td>31509</td>
+      <td>54.6764</td>
+      <td>18.1343</td>
+      <td>435.22</td>
+      <td>14.8227</td>
+      <td>17,228 case (54.68%), Mean = 18.13 hari</td>
+    </tr>
+    <tr>
+      <td>11.7 D</td>
+      <td>Berapa unsuccessful cases dan rata-rata cycle time-nya?</td>
+      <td>Contains Filter: Case memuat setidaknya satu event 'O_Refused' (tidak dipaksa saling eksklusif dengan 11.7 C).</td>
+      <td>3720</td>
+      <td>31509</td>
+      <td>11.8062</td>
+      <td>16.8775</td>
+      <td>405.06</td>
+      <td>14.1231</td>
+      <td>3,720 case (11.81%), Mean = 16.88 hari</td>
+    </tr>
+    <tr>
+      <td>11.7 E</td>
+      <td>Berapa canceled cases dan rata-rata cycle time-nya?</td>
+      <td>Endpoint Filter: Event TERAKHIR pada urutan trace adalah 'O_Cancelled' (case dengan O_Cancelled di tengah trace tetapi diikuti event lain tidak lolos).</td>
+      <td>4436</td>
+      <td>31509</td>
+      <td>14.0785</td>
+      <td>23.5104</td>
+      <td>564.25</td>
+      <td>19.9765</td>
+      <td>4,436 case (14.08%), Mean = 23.51 hari</td>
+    </tr>
+    <tr>
+      <td>11.15</td>
+      <td>Berapa case dengan W_Assess Potential Fraud selesai minimal 2x?</td>
+      <td>Pilih case dengan aktivitas 'W_Assess potential fraud' berstatus lifecycle:transition == 'complete' sebanyak minimal 2 kali dalam satu trace.</td>
+      <td>13</td>
+      <td>31509</td>
+      <td>0.0413</td>
+      <td>28.1619</td>
+      <td>675.89</td>
+      <td>19.5072</td>
+      <td>13 case (0.0413%)</td>
+    </tr>
+    <tr>
+      <td>11.18</td>
+      <td>Berapa case dengan W_Assess Potential Fraud selesai minimal 2x oleh resource yang sama?</td>
+      <td>Pilih case dengan aktivitas 'W_Assess potential fraud' berstatus lifecycle:transition == 'complete' yang diselesaikan minimal 2 kali oleh org:resource yang SAMA (resource kosong/tidak valid diabaikan).</td>
+      <td>3</td>
+      <td>31509</td>
+      <td>0.0095</td>
+      <td>36.9402</td>
+      <td>886.56</td>
+      <td>49.3007</td>
+      <td>3 case (0.0095%)</td>
+    </tr>
+    <tr>
+      <td>11.22</td>
+      <td>Adakah O_Cancelled yang kemudian diikuti O_Accepted? Berapa persentase case-nya?</td>
+      <td>Eventually Follows Filter (Level Trace/Case): Terdapat pasangan posisi i &lt; j dalam satu trace di mana event ke-i adalah 'O_Cancelled' dan event ke-j adalah 'O_Accepted' (kedua event tidak harus bersebelahan). Persentase = (Jumlah Case Cocok / 31509) × 100%.</td>
+      <td>902</td>
+      <td>31509</td>
+      <td>2.8627</td>
+      <td>21.4004</td>
+      <td>513.61</td>
+      <td>17.4015</td>
+      <td>Ya, ada 902 dari 31,509 case (2.86% / 2.8627%)</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+
+  <h2>2. Bukti Case Exercise 11.15 (W_Assess potential fraud &ge; 2x complete)</h2>
+  <div class="card">
+    <p><span class="badge">Aturan Filter</span> Pilih case dengan aktivitas 'W_Assess potential fraud' berstatus lifecycle:transition == 'complete' sebanyak minimal 2 kali dalam satu trace.</p>
+    <p>Jumlah case dengan &ge; 2 event semua lifecycle: <strong>303</strong> case |
+       Jumlah case dengan &ge; 2 event <code>complete</code>: <strong>13</strong> case (tereliminasi oleh filter lifecycle complete: 290 case).</p>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>case_id</th>
+      <th>complete_occurrences</th>
+      <th>all_lifecycle_occurrences</th>
+      <th>resources_involved</th>
+      <th>unique_valid_resources</th>
+      <th>first_complete_time</th>
+      <th>last_complete_time</th>
+      <th>case_total_events</th>
+      <th>case_duration_days</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Application_612471425</td>
+      <td>2</td>
+      <td>19</td>
+      <td>User_99, User_144</td>
+      <td>2</td>
+      <td>2016-03-07 15:19:56.219000+00:00</td>
+      <td>2016-03-09 08:37:17.801000+00:00</td>
+      <td>47</td>
+      <td>19.507157</td>
+    </tr>
+    <tr>
+      <td>Application_900460993</td>
+      <td>2</td>
+      <td>22</td>
+      <td>User_144, User_138</td>
+      <td>2</td>
+      <td>2016-03-22 08:45:48.669000+00:00</td>
+      <td>2016-03-22 09:32:01.256000+00:00</td>
+      <td>49</td>
+      <td>10.929721</td>
+    </tr>
+    <tr>
+      <td>Application_534041276</td>
+      <td>2</td>
+      <td>8</td>
+      <td>User_75, User_138</td>
+      <td>2</td>
+      <td>2016-05-12 12:55:29.912000+00:00</td>
+      <td>2016-05-13 07:07:52.977000+00:00</td>
+      <td>100</td>
+      <td>30.798809</td>
+    </tr>
+    <tr>
+      <td>Application_412627378</td>
+      <td>2</td>
+      <td>9</td>
+      <td>User_83, User_144</td>
+      <td>2</td>
+      <td>2016-05-19 10:43:23.843000+00:00</td>
+      <td>2016-05-19 12:42:00.234000+00:00</td>
+      <td>97</td>
+      <td>15.968142</td>
+    </tr>
+    <tr>
+      <td>Application_1221917431</td>
+      <td>2</td>
+      <td>14</td>
+      <td>User_144, User_144</td>
+      <td>1</td>
+      <td>2016-07-05 11:36:11.613000+00:00</td>
+      <td>2016-07-06 09:35:58.622000+00:00</td>
+      <td>110</td>
+      <td>49.300718</td>
+    </tr>
+    <tr>
+      <td>Application_1021748617</td>
+      <td>2</td>
+      <td>10</td>
+      <td>User_99, User_138</td>
+      <td>2</td>
+      <td>2016-06-20 13:31:57.643000+00:00</td>
+      <td>2016-06-21 08:54:00.134000+00:00</td>
+      <td>39</td>
+      <td>13.926169</td>
+    </tr>
+    <tr>
+      <td>Application_473455481</td>
+      <td>2</td>
+      <td>21</td>
+      <td>User_143, User_143</td>
+      <td>1</td>
+      <td>2016-08-18 07:12:22.725000+00:00</td>
+      <td>2016-08-25 11:03:54.059000+00:00</td>
+      <td>78</td>
+      <td>49.639854</td>
+    </tr>
+    <tr>
+      <td>Application_1292983087</td>
+      <td>3</td>
+      <td>53</td>
+      <td>User_90, User_143, User_138</td>
+      <td>3</td>
+      <td>2016-08-11 08:05:51.911000+00:00</td>
+      <td>2016-10-07 07:04:40.985000+00:00</td>
+      <td>86</td>
+      <td>71.810579</td>
+    </tr>
+    <tr>
+      <td>Application_438711887</td>
+      <td>2</td>
+      <td>20</td>
+      <td>User_93, User_138</td>
+      <td>2</td>
+      <td>2016-10-18 15:45:28.901000+00:00</td>
+      <td>2016-10-20 06:50:21.052000+00:00</td>
+      <td>108</td>
+      <td>38.009338</td>
+    </tr>
+    <tr>
+      <td>Application_1405826636</td>
+      <td>2</td>
+      <td>12</td>
+      <td>User_143, User_143</td>
+      <td>1</td>
+      <td>2016-11-21 16:02:30.874000+00:00</td>
+      <td>2016-11-22 08:17:07.392000+00:00</td>
+      <td>52</td>
+      <td>11.879920</td>
+    </tr>
+    <tr>
+      <td>Application_287618269</td>
+      <td>2</td>
+      <td>20</td>
+      <td>User_83, User_138</td>
+      <td>2</td>
+      <td>2016-12-01 10:12:01.423000+00:00</td>
+      <td>2016-12-12 14:29:46.122000+00:00</td>
+      <td>62</td>
+      <td>25.906025</td>
+    </tr>
+    <tr>
+      <td>Application_1114361455</td>
+      <td>2</td>
+      <td>12</td>
+      <td>User_138, User_143</td>
+      <td>2</td>
+      <td>2016-12-02 09:15:56.833000+00:00</td>
+      <td>2016-12-15 07:58:01.236000+00:00</td>
+      <td>62</td>
+      <td>13.650040</td>
+    </tr>
+    <tr>
+      <td>Application_1568546217</td>
+      <td>2</td>
+      <td>16</td>
+      <td>User_75, User_138</td>
+      <td>2</td>
+      <td>2017-01-10 11:24:20.770000+00:00</td>
+      <td>2017-01-12 09:43:29.735000+00:00</td>
+      <td>80</td>
+      <td>14.778285</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+
+  <h2>3. Bukti Case Exercise 11.18 (W_Assess potential fraud &ge; 2x complete oleh Resource Sama)</h2>
+  <div class="card">
+    <p><span class="badge">Aturan Filter</span> Pilih case dengan aktivitas 'W_Assess potential fraud' berstatus lifecycle:transition == 'complete' yang diselesaikan minimal 2 kali oleh org:resource yang SAMA (resource kosong/tidak valid diabaikan).</p>
+    <p>Case lolos 11.15 namun dilakukan oleh resource berbeda: <strong>10</strong> case (Application_1021748617, Application_1114361455, Application_1292983087, Application_1568546217, Application_287618269, Application_412627378, Application_438711887, Application_534041276, Application_612471425, Application_900460993).</p>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>case_id</th>
+      <th>resource_id</th>
+      <th>same_resource_completions</th>
+      <th>total_case_completions</th>
+      <th>first_complete_time</th>
+      <th>last_complete_time</th>
+      <th>evidence_event_ids</th>
+      <th>case_duration_days</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Application_1221917431</td>
+      <td>User_144</td>
+      <td>2</td>
+      <td>2</td>
+      <td>2016-07-05 11:36:11.613000+00:00</td>
+      <td>2016-07-06 09:35:58.622000+00:00</td>
+      <td>Workitem_454709354, Workitem_1308810967</td>
+      <td>49.300718</td>
+    </tr>
+    <tr>
+      <td>Application_473455481</td>
+      <td>User_143</td>
+      <td>2</td>
+      <td>2</td>
+      <td>2016-08-18 07:12:22.725000+00:00</td>
+      <td>2016-08-25 11:03:54.059000+00:00</td>
+      <td>Workitem_587026412, Workitem_419868375</td>
+      <td>49.639854</td>
+    </tr>
+    <tr>
+      <td>Application_1405826636</td>
+      <td>User_143</td>
+      <td>2</td>
+      <td>2</td>
+      <td>2016-11-21 16:02:30.874000+00:00</td>
+      <td>2016-11-22 08:17:07.392000+00:00</td>
+      <td>Workitem_379454948, Workitem_865385655</td>
+      <td>11.879920</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+
+  <h2>4. Bukti Case Exercise 11.22 (O_Cancelled diikuti O_Accepted — 25 Sampel Pertama)</h2>
+  <div class="card">
+    <p><span class="badge">Aturan Filter</span> Eventually Follows Filter (Level Trace/Case): Terdapat pasangan posisi i < j dalam satu trace di mana event ke-i adalah 'O_Cancelled' dan event ke-j adalah 'O_Accepted' (kedua event tidak harus bersebelahan). Persentase = (Jumlah Case Cocok / 31509) × 100%.</p>
+    <p>Total Case Cocok: <strong>902</strong> dari <strong>31,509</strong> case (<strong>2.86%</strong> / 2.8627%).</p>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>case_id</th>
+      <th>cancelled_trace_pos</th>
+      <th>cancelled_timestamp</th>
+      <th>cancelled_offer_id</th>
+      <th>accepted_trace_pos</th>
+      <th>accepted_timestamp</th>
+      <th>accepted_offer_id</th>
+      <th>intervening_events_count</th>
+      <th>time_between_days</th>
+      <th>trace_end_activity</th>
+      <th>case_duration_days</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Application_428409768</td>
+      <td>19</td>
+      <td>2016-01-02 11:26:06.088000+00:00</td>
+      <td>Offer_1209840642</td>
+      <td>43</td>
+      <td>2016-01-14 07:00:14.440000+00:00</td>
+      <td>Offer_997411923</td>
+      <td>23</td>
+      <td>11.815374</td>
+      <td>W_Validate application</td>
+      <td>12.819864</td>
+    </tr>
+    <tr>
+      <td>Application_1059184025</td>
+      <td>9</td>
+      <td>2016-01-02 12:42:59.321000+00:00</td>
+      <td>Offer_1215355195</td>
+      <td>39</td>
+      <td>2016-01-08 16:05:47.589000+00:00</td>
+      <td>Offer_868206108</td>
+      <td>29</td>
+      <td>6.140836</td>
+      <td>W_Validate application</td>
+      <td>6.205362</td>
+    </tr>
+    <tr>
+      <td>Application_1699757505</td>
+      <td>24</td>
+      <td>2016-01-04 09:38:43.055000+00:00</td>
+      <td>Offer_1301660092</td>
+      <td>48</td>
+      <td>2016-01-12 10:55:29.363000+00:00</td>
+      <td>Offer_818647679</td>
+      <td>23</td>
+      <td>8.053314</td>
+      <td>O_Cancelled</td>
+      <td>9.952080</td>
+    </tr>
+    <tr>
+      <td>Application_767475240</td>
+      <td>14</td>
+      <td>2016-01-02 14:51:15.041000+00:00</td>
+      <td>Offer_106103074</td>
+      <td>67</td>
+      <td>2016-02-01 08:10:25.122000+00:00</td>
+      <td>Offer_1069431412</td>
+      <td>52</td>
+      <td>29.721644</td>
+      <td>O_Cancelled</td>
+      <td>29.796835</td>
+    </tr>
+    <tr>
+      <td>Application_1845547664</td>
+      <td>17</td>
+      <td>2016-01-04 18:23:30.076000+00:00</td>
+      <td>Offer_1576107007</td>
+      <td>44</td>
+      <td>2016-01-13 14:58:00.144000+00:00</td>
+      <td>Offer_236427577</td>
+      <td>26</td>
+      <td>8.857292</td>
+      <td>W_Validate application</td>
+      <td>10.113834</td>
+    </tr>
+    <tr>
+      <td>Application_1446096185</td>
+      <td>8</td>
+      <td>2016-01-04 08:20:42.519000+00:00</td>
+      <td>Offer_1084399342</td>
+      <td>47</td>
+      <td>2016-01-22 08:46:23.605000+00:00</td>
+      <td>Offer_1346286187</td>
+      <td>38</td>
+      <td>18.017837</td>
+      <td>W_Call incomplete files</td>
+      <td>18.026416</td>
+    </tr>
+    <tr>
+      <td>Application_1471099537</td>
+      <td>13</td>
+      <td>2016-01-05 09:12:06.941000+00:00</td>
+      <td>Offer_72138522</td>
+      <td>28</td>
+      <td>2016-01-12 09:44:57.619000+00:00</td>
+      <td>Offer_253224262</td>
+      <td>14</td>
+      <td>7.022809</td>
+      <td>W_Validate application</td>
+      <td>7.970957</td>
+    </tr>
+    <tr>
+      <td>Application_1308403282</td>
+      <td>18</td>
+      <td>2016-01-05 14:04:31.100000+00:00</td>
+      <td>Offer_549751874</td>
+      <td>37</td>
+      <td>2016-01-22 07:56:50.575000+00:00</td>
+      <td>Offer_191688588</td>
+      <td>18</td>
+      <td>16.744670</td>
+      <td>W_Call incomplete files</td>
+      <td>17.661282</td>
+    </tr>
+    <tr>
+      <td>Application_948316229</td>
+      <td>23</td>
+      <td>2016-01-15 11:06:09.826000+00:00</td>
+      <td>Offer_1776591059</td>
+      <td>74</td>
+      <td>2016-02-26 08:16:33.620000+00:00</td>
+      <td>Offer_418058800</td>
+      <td>50</td>
+      <td>41.882220</td>
+      <td>W_Validate application</td>
+      <td>52.659786</td>
+    </tr>
+    <tr>
+      <td>Application_1268592022</td>
+      <td>20</td>
+      <td>2016-01-05 15:56:27.183000+00:00</td>
+      <td>Offer_692933399</td>
+      <td>38</td>
+      <td>2016-01-22 08:30:41.301000+00:00</td>
+      <td>Offer_1956925417</td>
+      <td>17</td>
+      <td>16.690441</td>
+      <td>W_Call incomplete files</td>
+      <td>17.598224</td>
+    </tr>
+    <tr>
+      <td>Application_346636726</td>
+      <td>15</td>
+      <td>2016-01-05 09:04:46.909000+00:00</td>
+      <td>Offer_429687222</td>
+      <td>39</td>
+      <td>2016-01-13 15:49:26.736000+00:00</td>
+      <td>Offer_289364079</td>
+      <td>23</td>
+      <td>8.281017</td>
+      <td>W_Validate application</td>
+      <td>8.291381</td>
+    </tr>
+    <tr>
+      <td>Application_1259601023</td>
+      <td>14</td>
+      <td>2016-01-06 10:50:55.924000+00:00</td>
+      <td>Offer_112337907</td>
+      <td>45</td>
+      <td>2016-01-13 14:59:15.546000+00:00</td>
+      <td>Offer_1951069732</td>
+      <td>30</td>
+      <td>7.172449</td>
+      <td>W_Validate application</td>
+      <td>8.175404</td>
+    </tr>
+    <tr>
+      <td>Application_1231177181</td>
+      <td>18</td>
+      <td>2016-01-11 09:30:35.592000+00:00</td>
+      <td>Offer_882792332</td>
+      <td>47</td>
+      <td>2016-01-15 08:48:20.141000+00:00</td>
+      <td>Offer_659630981</td>
+      <td>28</td>
+      <td>3.970655</td>
+      <td>O_Cancelled</td>
+      <td>9.612443</td>
+    </tr>
+    <tr>
+      <td>Application_1549864001</td>
+      <td>13</td>
+      <td>2016-01-06 09:19:46.747000+00:00</td>
+      <td>Offer_1970908420</td>
+      <td>37</td>
+      <td>2016-01-22 07:02:35.856000+00:00</td>
+      <td>Offer_1531004003</td>
+      <td>23</td>
+      <td>15.904735</td>
+      <td>W_Call incomplete files</td>
+      <td>15.912954</td>
+    </tr>
+    <tr>
+      <td>Application_1312956122</td>
+      <td>17</td>
+      <td>2016-01-07 17:26:07.744000+00:00</td>
+      <td>Offer_1891181690</td>
+      <td>46</td>
+      <td>2016-01-15 08:37:12.690000+00:00</td>
+      <td>Offer_212259875</td>
+      <td>28</td>
+      <td>7.632696</td>
+      <td>W_Validate application</td>
+      <td>8.783366</td>
+    </tr>
+    <tr>
+      <td>Application_854402455</td>
+      <td>26</td>
+      <td>2016-01-18 09:05:53.909000+00:00</td>
+      <td>Offer_1298850679</td>
+      <td>36</td>
+      <td>2016-01-19 14:37:57.100000+00:00</td>
+      <td>Offer_941007473</td>
+      <td>9</td>
+      <td>1.230592</td>
+      <td>W_Validate application</td>
+      <td>12.224032</td>
+    </tr>
+    <tr>
+      <td>Application_1833979489</td>
+      <td>9</td>
+      <td>2016-01-07 18:19:35.244000+00:00</td>
+      <td>Offer_1053069371</td>
+      <td>48</td>
+      <td>2016-01-14 08:32:05.753000+00:00</td>
+      <td>Offer_2059065061</td>
+      <td>38</td>
+      <td>6.592020</td>
+      <td>W_Validate application</td>
+      <td>6.623127</td>
+    </tr>
+    <tr>
+      <td>Application_899505410</td>
+      <td>34</td>
+      <td>2016-02-08 18:47:26.432000+00:00</td>
+      <td>Offer_1829140786</td>
+      <td>60</td>
+      <td>2016-02-29 09:38:37.046000+00:00</td>
+      <td>Offer_1479428953</td>
+      <td>25</td>
+      <td>20.618873</td>
+      <td>O_Cancelled</td>
+      <td>51.835665</td>
+    </tr>
+    <tr>
+      <td>Application_515209816</td>
+      <td>20</td>
+      <td>2016-01-20 15:46:49.612000+00:00</td>
+      <td>Offer_517017261</td>
+      <td>28</td>
+      <td>2016-01-26 15:13:24.390000+00:00</td>
+      <td>Offer_1194124683</td>
+      <td>7</td>
+      <td>5.976791</td>
+      <td>W_Validate application</td>
+      <td>17.249529</td>
+    </tr>
+    <tr>
+      <td>Application_92091920</td>
+      <td>8</td>
+      <td>2016-01-09 15:08:04.765000+00:00</td>
+      <td>Offer_1394354424</td>
+      <td>43</td>
+      <td>2016-01-22 14:18:02.697000+00:00</td>
+      <td>Offer_1339515610</td>
+      <td>34</td>
+      <td>12.965254</td>
+      <td>W_Validate application</td>
+      <td>12.973133</td>
+    </tr>
+    <tr>
+      <td>Application_296383634</td>
+      <td>22</td>
+      <td>2016-02-04 08:22:49.078000+00:00</td>
+      <td>Offer_16407099</td>
+      <td>34</td>
+      <td>2016-02-19 09:27:37.169000+00:00</td>
+      <td>Offer_1710853279</td>
+      <td>11</td>
+      <td>15.045001</td>
+      <td>W_Validate application</td>
+      <td>40.148035</td>
+    </tr>
+    <tr>
+      <td>Application_1041929908</td>
+      <td>16</td>
+      <td>2016-01-12 14:38:40.214000+00:00</td>
+      <td>Offer_1360818737</td>
+      <td>46</td>
+      <td>2016-02-08 11:58:01.879000+00:00</td>
+      <td>Offer_977536855</td>
+      <td>29</td>
+      <td>26.888445</td>
+      <td>O_Cancelled</td>
+      <td>27.791109</td>
+    </tr>
+    <tr>
+      <td>Application_1084718608</td>
+      <td>32</td>
+      <td>2016-02-03 10:54:26.274000+00:00</td>
+      <td>Offer_1902016788</td>
+      <td>63</td>
+      <td>2016-02-22 08:09:48.348000+00:00</td>
+      <td>Offer_1262145221</td>
+      <td>30</td>
+      <td>18.885672</td>
+      <td>O_Cancelled</td>
+      <td>41.499146</td>
+    </tr>
+    <tr>
+      <td>Application_123987545</td>
+      <td>19</td>
+      <td>2016-01-18 11:37:18.232000+00:00</td>
+      <td>Offer_1437620543</td>
+      <td>63</td>
+      <td>2016-02-15 13:12:20.770000+00:00</td>
+      <td>Offer_12106654</td>
+      <td>43</td>
+      <td>28.066002</td>
+      <td>O_Cancelled</td>
+      <td>33.941315</td>
+    </tr>
+    <tr>
+      <td>Application_704665572</td>
+      <td>21</td>
+      <td>2016-01-13 10:33:52.078000+00:00</td>
+      <td>Offer_1100934501</td>
+      <td>67</td>
+      <td>2016-01-22 07:21:20.181000+00:00</td>
+      <td>Offer_2144953055</td>
+      <td>45</td>
+      <td>8.866297</td>
+      <td>O_Cancelled</td>
+      <td>9.594187</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+</body>
+</html>

@@ -1,0 +1,5 @@
+﻿case_id,event_count,start_timestamp,end_timestamp,first_activity,last_activity,duration_seconds,duration_hours,duration_days,minmax_duration_days,speed_category,trigger_activity,trigger_count
+CASE_01_DOUBLE_ACCEPTED,3,2026-01-01 08:00:00+00:00,2026-01-11 08:00:00+00:00,A_Create Application,O_Accepted,864000.0,240.0,10.0,10.0,Fast (< 45 hari),O_Accepted,2
+CASE_03_BOTH_REFUSED_AND_ACCEPTED,3,2026-01-01 08:00:00+00:00,2026-01-09 08:00:00+00:00,A_Create Application,O_Accepted,691200.0,192.0,8.0,8.0,Fast (< 45 hari),O_Accepted,1
+CASE_08_CANCELLED_THEN_OTHER_THEN_ACCEPTED,4,2026-01-01 08:00:00+00:00,2026-01-13 08:00:00+00:00,A_Create Application,O_Accepted,1036800.0,288.0,12.0,12.0,Fast (< 45 hari),O_Accepted,1
+CASE_09_ACCEPTED_BEFORE_CANCELLED_NO_ACCEPTED_AFTER,3,2026-01-01 08:00:00+00:00,2026-01-10 08:00:00+00:00,A_Create Application,O_Cancelled,777600.0,216.0,9.0,9.0,Fast (< 45 hari),O_Accepted,1

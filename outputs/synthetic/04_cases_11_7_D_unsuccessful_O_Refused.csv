@@ -1,0 +1,2 @@
+﻿case_id,event_count,start_timestamp,end_timestamp,first_activity,last_activity,duration_seconds,duration_hours,duration_days,minmax_duration_days,speed_category,trigger_activity,trigger_count
+CASE_03_BOTH_REFUSED_AND_ACCEPTED,3,2026-01-01 08:00:00+00:00,2026-01-09 08:00:00+00:00,A_Create Application,O_Accepted,691200.0,192.0,8.0,8.0,Fast (< 45 hari),O_Refused,1
