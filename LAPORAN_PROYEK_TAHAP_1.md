@@ -214,14 +214,3 @@ Seluruh tangkapan layar resolusi penuh tersimpan di folder [`screenshots/`](scre
    - *Solusi*: Mengimplementasikan arsitektur *Model-View* menggunakan `QAbstractTableModel` (`DataFrameTableModel`) dan `QSortFilterProxyModel` yang membaca langsung dari memori `pandas.DataFrame` secara *lazy/virtual*, sehingga pencarian dan pengurutan 31.509 case berlangsung instan (< 50 ms).
 
 ---
-
-## 9. Pembagian Peran & Kontribusi Anggota Kelompok (4 Mahasiswa)
-
-Sesuai pedoman Bagian 9 Instruksi Proyek Tahap 1, berikut adalah pembagian tanggung jawab ke-4 anggota kelompok (silakan sesuaikan NIM/Nama anggota kelompok Anda sebelum pengumpulan final):
-
-| Peran / Anggota | Modul yang Dikerjakan | Rincian Kontribusi & Tanggung Jawab |
-| :--- | :--- | :--- |
-| **Anggota 1** *(Parsing, Validasi & Overview)* | `src/core.py`, `src/analyzer.py` (`analyze_overview`) | Mengimplementasikan impor XES dengan `pm4py.read_xes`, validasi atribut wajib/opsional (F01), pre-komputasi indeks urutan trace (`_trace_pos`), perhitungan *cycle time* per case, serta statistik overview & frekuensi aktivitas (F02). |
-| **Anggota 2** *(Exercise 11.7 & Cycle Time)* | `src/analyzer.py` (`analyze_exercise_11_7`) | Merancang dan menguji aturan filter `Contains` (`O_Accepted` pada 11.7 C, `O_Refused` pada 11.7 D) dan aturan `Endpoint` (`O_Cancelled` pada 11.7 E) menggunakan PM4Py tanpa mengubah konteks durasi trace utuh (F03). |
-| **Anggota 3** *(Exercise 11.15, 11.18 & 11.22)* | `src/analyzer.py` (`analyze_exercise_11_15`, `11_18`, `11_22`), `src/synthetic.py` | Mengimplementasikan filter *repeated complete* `W_Assess potential fraud` ($\ge 2\times$ `complete`, F04), filter *same resource* dengan validasi resource kosong (F05), filter *eventually follows* `O_Cancelled` $\rightarrow$ `O_Accepted` beserta analisis level `OfferID` (F06), dan log sintetis. |
-| **Anggota 4** *(Integrasi GUI, Case Explorer & Ekspor)* | `src/gui.py`, `src/exporter.py`, `main.py`, `tests/test_edge_cases.py` | Membangun antarmuka desktop PySide6 7-tab dengan *worker thread* (`QThread`), fitur pencarian & penyorotan bukti di *Case Explorer*, ekspor otomatis CSV/HTML (F07), serta pengujian unit *edge cases* dan penyusunan dokumentasi laporan. |
