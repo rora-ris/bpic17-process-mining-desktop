@@ -8,17 +8,24 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import pm4py
 
-from .core import INVALID_RESOURCE_STRINGS, EventLogContext
+from .core import INVALID_RESOURCE_STRINGS, EventLogContext, is_valid_activity, is_valid_resource
 
 
-def is_valid_resource(val: Any) -> bool:
-    """Checks if a resource value is non-null, non-empty, and not a placeholder."""
-    if val is None or pd.isna(val):
-        return False
-    s = str(val).strip()
-    if s.lower() in INVALID_RESOURCE_STRINGS:
-        return False
-    return True
+def format_duration_human(days: float) -> str:
+    """Formats duration in days into an adaptive human-readable string with units."""
+    if pd.isna(days) or days < 0:
+        return "0.0000 hari (0.0 dtk)"
+    sec = days * 86400.0
+    if sec < 60.0:
+        return f"{sec:.2f} detik ({days:.6f} hari)"
+    if sec < 3600.0:
+        mins = sec / 60.0
+        return f"{mins:.2f} menit ({days:.5f} hari)"
+    if sec < 86400.0:
+        hrs = sec / 3600.0
+        return f"{hrs:.2f} jam ({days:.4f} hari)"
+    hrs = sec / 3600.0
+    return f"{days:.2f} hari ({days:.4f} hari / {hrs:.1f} jam)"
 
 
 @dataclass
@@ -137,7 +144,10 @@ def analyze_overview(ctx: EventLogContext) -> OverviewResult:
 
     total_cases = len(cs)
     total_events = len(df)
-    unique_acts = int(df["concept:name"].nunique())
+    
+    # Filter valid activities consistently with valid resources
+    valid_acts = df["concept:name"][df["concept:name"].apply(is_valid_activity)]
+    unique_acts = int(valid_acts.nunique())
 
     if "org:resource" in df.columns:
         valid_res = df["org:resource"][df["org:resource"].apply(is_valid_resource)]
@@ -145,35 +155,46 @@ def analyze_overview(ctx: EventLogContext) -> OverviewResult:
     else:
         unique_res = 0
 
-    min_ts = df["time:timestamp"].min()
-    max_ts = df["time:timestamp"].max()
+    min_ts = df["time:timestamp"].min() if not df.empty else None
+    max_ts = df["time:timestamp"].max() if not df.empty else None
 
-    dur_days = cs["duration_days"]
+    # Handle duration series safely against NaN
+    dur_days = cs["duration_days"].fillna(0.0) if not cs.empty else pd.Series(dtype=float)
+    dur_hours = cs["duration_hours"].fillna(0.0) if not cs.empty else pd.Series(dtype=float)
+    dur_secs = cs["duration_seconds"].fillna(0.0) if not cs.empty else pd.Series(dtype=float)
+
     mean_days = float(dur_days.mean()) if total_cases > 0 else 0.0
-    mean_hours = float(cs["duration_hours"].mean()) if total_cases > 0 else 0.0
-    mean_secs = float(cs["duration_seconds"].mean()) if total_cases > 0 else 0.0
+    mean_hours = float(dur_hours.mean()) if total_cases > 0 else 0.0
+    mean_secs = float(dur_secs.mean()) if total_cases > 0 else 0.0
     median_days = float(dur_days.median()) if total_cases > 0 else 0.0
     min_days = float(dur_days.min()) if total_cases > 0 else 0.0
     max_days = float(dur_days.max()) if total_cases > 0 else 0.0
-    std_days = float(dur_days.std()) if total_cases > 1 else 0.0
+    std_days = float(dur_days.std(ddof=1)) if total_cases > 1 else 0.0
+    if pd.isna(std_days):
+        std_days = 0.0
 
     # Optional enrichment (Section 12): Fast (< 45 days) vs Slow (>= 45 days) cases (Example 11.10)
+    # Complementary boolean mask ensures fast_cnt + slow_cnt == total_cases (100.0%)
     fast_mask = dur_days < 45.0
-    slow_mask = dur_days >= 45.0
+    slow_mask = ~fast_mask
     fast_cnt = int(fast_mask.sum())
     slow_cnt = int(slow_mask.sum())
     fast_pct = (fast_cnt / total_cases * 100.0) if total_cases > 0 else 0.0
     slow_pct = (slow_cnt / total_cases * 100.0) if total_cases > 0 else 0.0
     fast_mean = float(dur_days[fast_mask].mean()) if fast_cnt > 0 else 0.0
     slow_mean = float(dur_days[slow_mask].mean()) if slow_cnt > 0 else 0.0
+    if pd.isna(fast_mean):
+        fast_mean = 0.0
+    if pd.isna(slow_mean):
+        slow_mean = 0.0
 
     return OverviewResult(
         total_cases=total_cases,
         total_events=total_events,
         unique_activities=unique_acts,
         unique_resources=unique_res,
-        log_start_time=str(min_ts),
-        log_end_time=str(max_ts),
+        log_start_time=str(min_ts) if min_ts is not None else "-",
+        log_end_time=str(max_ts) if max_ts is not None else "-",
         mean_cycle_time_days=mean_days,
         mean_cycle_time_hours=mean_hours,
         mean_cycle_time_seconds=mean_secs,
