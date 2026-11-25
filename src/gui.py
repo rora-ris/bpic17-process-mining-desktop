@@ -14,7 +14,6 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QModelIndex,
     QObject,
-    QSortFilterProxyModel,
     Qt,
     QThread,
     QTimer,
@@ -407,11 +406,20 @@ class DataFrameTableModel(QAbstractTableModel):
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
-        self._df = df.copy().reset_index(drop=True) if df is not None else pd.DataFrame()
+        self._source_df = df.copy().reset_index(drop=True) if df is not None else pd.DataFrame()
+        self._df = self._source_df
         self.highlight_activities = [a.lower() for a in (highlight_activities or [])]
         self.highlight_lifecycle = highlight_lifecycle.lower() if highlight_lifecycle else None
         self.highlight_resource = highlight_resource.lower() if highlight_resource else None
         self._bold_font = QFont("Segoe UI", 9, QFont.Bold)
+        self._filter_text: str = ""
+        self._search_corpus: Optional[pd.Series] = None
+        self._sort_col: int = -1
+        self._sort_order: Qt.SortOrder = Qt.AscendingOrder
+        self._col_names: List[str] = []
+        self._col_arrays: List[np.ndarray] = []
+        self._highlight_states: Optional[np.ndarray] = None
+        self._apply_filter_and_sort()
 
     def set_dataframe(
         self,
@@ -421,11 +429,105 @@ class DataFrameTableModel(QAbstractTableModel):
         highlight_resource: Optional[str] = None,
     ) -> None:
         self.beginResetModel()
-        self._df = df.copy().reset_index(drop=True) if df is not None else pd.DataFrame()
+        self._source_df = df.copy().reset_index(drop=True) if df is not None else pd.DataFrame()
         self.highlight_activities = [a.lower() for a in (highlight_activities or [])]
         self.highlight_lifecycle = highlight_lifecycle.lower() if highlight_lifecycle else None
         self.highlight_resource = highlight_resource.lower() if highlight_resource else None
+        self._search_corpus = None
+        self._sort_col = -1
+        self._apply_filter_and_sort()
         self.endResetModel()
+
+    def set_filter_text(self, text: str) -> None:
+        needle = text.strip().lower()
+        if needle == self._filter_text:
+            return
+        self.beginResetModel()
+        self._filter_text = needle
+        self._apply_filter_and_sort()
+        self.endResetModel()
+
+    def sort(self, column: int, order: Qt.SortOrder = Qt.AscendingOrder) -> None:
+        if self._source_df.empty or column < 0 or column >= len(self._source_df.columns):
+            return
+        self.beginResetModel()
+        self._sort_col = column
+        self._sort_order = order
+        self._apply_filter_and_sort()
+        self.endResetModel()
+
+    def _apply_filter_and_sort(self) -> None:
+        if self._source_df.empty:
+            self._df = self._source_df
+            self._rebuild_cache()
+            return
+
+        if self._filter_text:
+            if self._search_corpus is None:
+                parts = [self._source_df[c].astype(str).str.lower() for c in self._source_df.columns]
+                corpus = parts[0]
+                for p in parts[1:]:
+                    corpus = corpus.str.cat(p, sep="\t")
+                self._search_corpus = corpus
+            mask = self._search_corpus.str.contains(self._filter_text, regex=False, na=False)
+            view = self._source_df.loc[mask]
+        else:
+            view = self._source_df
+
+        if 0 <= self._sort_col < len(view.columns):
+            col_key = view.columns[self._sort_col]
+            asc = self._sort_order == Qt.AscendingOrder
+            try:
+                view = view.sort_values(by=col_key, ascending=asc, kind="mergesort", na_position="last")
+            except TypeError:
+                view = view.sort_values(
+                    by=col_key,
+                    ascending=asc,
+                    kind="mergesort",
+                    na_position="last",
+                    key=lambda s: s.astype(str),
+                )
+
+        if view is self._source_df:
+            self._df = view
+        else:
+            self._df = view.reset_index(drop=True)
+        self._rebuild_cache()
+
+    def _rebuild_cache(self) -> None:
+        self._col_names = [str(c) for c in self._df.columns]
+        self._col_arrays = [self._df[c].to_numpy() for c in self._df.columns]
+        if not self.highlight_activities or self._df.empty or "concept:name" not in self._df.columns:
+            self._highlight_states = None
+            return
+
+        act_arr = self._df["concept:name"].to_numpy()
+        act_match = np.array(
+            [str(v).strip().lower() in self.highlight_activities for v in act_arr],
+            dtype=bool,
+        )
+        if not act_match.any():
+            self._highlight_states = np.zeros(len(self._df), dtype=np.int8)
+            return
+
+        exact_mask = act_match.copy()
+        if self.highlight_lifecycle and "lifecycle:transition" in self._df.columns:
+            lc_arr = self._df["lifecycle:transition"].to_numpy()
+            exact_mask &= np.array(
+                [str(v).strip().lower() == self.highlight_lifecycle for v in lc_arr],
+                dtype=bool,
+            )
+        if self.highlight_resource and "org:resource" in self._df.columns:
+            res_arr = self._df["org:resource"].to_numpy()
+            exact_mask &= np.array(
+                [str(v).strip().lower() == self.highlight_resource for v in res_arr],
+                dtype=bool,
+            )
+
+        states = np.zeros(len(self._df), dtype=np.int8)
+        states[act_match] = 1
+        states[exact_mask] = 2
+        self._highlight_states = states
 
     def get_dataframe(self) -> pd.DataFrame:
         return self._df
@@ -438,27 +540,13 @@ class DataFrameTableModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
             return 0
-        return len(self._df.columns)
+        return len(self._col_names)
 
     def _row_highlight_state(self, row: int) -> int:
         """Returns 2 for exact target match (yellow), 1 for partial activity match (soft blue), 0 otherwise."""
-        if not self.highlight_activities or self._df.empty:
+        if self._highlight_states is None:
             return 0
-        act_col = "concept:name" if "concept:name" in self._df.columns else None
-        if not act_col:
-            return 0
-        row_act = str(self._df.loc[row, act_col]).strip().lower()
-        if row_act not in self.highlight_activities:
-            return 0
-        lc_ok = True
-        if self.highlight_lifecycle and "lifecycle:transition" in self._df.columns:
-            row_lc = str(self._df.loc[row, "lifecycle:transition"]).strip().lower()
-            lc_ok = row_lc == self.highlight_lifecycle
-        res_ok = True
-        if self.highlight_resource and "org:resource" in self._df.columns:
-            row_res = str(self._df.loc[row, "org:resource"]).strip().lower()
-            res_ok = row_res == self.highlight_resource
-        return 2 if (lc_ok and res_ok) else 1
+        return int(self._highlight_states[row])
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
         if not index.isValid() or self._df.empty:
@@ -466,13 +554,13 @@ class DataFrameTableModel(QAbstractTableModel):
 
         row = index.row()
         col = index.column()
-        col_name = str(self._df.columns[col])
-        val = self._df.iloc[row, col]
+        col_name = self._col_names[col]
+        val = self._col_arrays[col][row]
 
         if role == Qt.DisplayRole:
             if pd.isna(val):
                 return "-"
-            if isinstance(val, bool):
+            if isinstance(val, (bool, np.bool_)):
                 return "Ya" if val else "Tidak"
             if isinstance(val, (float, np.floating)):
                 if "percentage" in col_name or "_pct" in col_name or "(%)" in col_name:
@@ -533,7 +621,7 @@ class DataFrameTableModel(QAbstractTableModel):
         if role == Qt.TextAlignmentRole:
             if col_name in ("Kode Soal", "_trace_pos", "cancelled_trace_pos", "accepted_trace_pos", "intervening_events_count", "same_offer_id"):
                 return int(Qt.AlignCenter)
-            if isinstance(val, (int, float, np.integer, np.floating)) and not isinstance(val, bool) and not pd.isna(val):
+            if isinstance(val, (int, float, np.integer, np.floating)) and not isinstance(val, (bool, np.bool_)) and not pd.isna(val):
                 return int(Qt.AlignRight | Qt.AlignVCenter)
             return int(Qt.AlignLeft | Qt.AlignVCenter)
 
@@ -543,8 +631,8 @@ class DataFrameTableModel(QAbstractTableModel):
         if self._df.empty:
             return None
         if orientation == Qt.Horizontal:
-            if 0 <= section < len(self._df.columns):
-                raw_col = str(self._df.columns[section])
+            if 0 <= section < len(self._col_names):
+                raw_col = self._col_names[section]
                 if role == Qt.DisplayRole:
                     return COLUMN_HEADER_MAP.get(raw_col, raw_col)
                 if role == Qt.ToolTipRole:
@@ -640,7 +728,7 @@ class AnalysisWorker(QThread):
             r1115 = analyze_exercise_11_15(ctx)
 
             self.progress_changed.emit("Menjalankan F05: Analisis Exercise 11.18 (Same Resource)...")
-            r1118 = analyze_exercise_11_18(ctx)
+            r1118 = analyze_exercise_11_18(ctx, res_1115=r1115)
 
             self.progress_changed.emit("Menjalankan F06: Analisis Exercise 11.22 (Eventually Follows)...")
             r1122 = analyze_exercise_11_22(ctx)
@@ -682,6 +770,7 @@ class MainWindow(QMainWindow):
         stretch_last: bool = True,
         word_wrap: bool = False,
         row_height: int = 28,
+        interactive_columns: bool = False,
     ) -> None:
         """Applies consistent modern table styling, smooth scrolling, and column sizing."""
         table.setAlternatingRowColors(True)
@@ -695,9 +784,26 @@ class MainWindow(QMainWindow):
         vh.setDefaultSectionSize(row_height)
         vh.setMinimumSectionSize(24)
         hh = table.horizontalHeader()
-        hh.setSectionResizeMode(QHeaderView.ResizeToContents)
+        if interactive_columns:
+            hh.setSectionResizeMode(QHeaderView.Interactive)
+            hh.setDefaultSectionSize(125)
+            hh.setMinimumSectionSize(60)
+        else:
+            hh.setSectionResizeMode(QHeaderView.ResizeToContents)
         hh.setStretchLastSection(stretch_last)
         hh.setHighlightSections(False)
+
+    @staticmethod
+    def _apply_column_widths(
+        table: QTableView,
+        df: pd.DataFrame,
+        width_map: Dict[str, int],
+        default_width: int = 120,
+    ) -> None:
+        if df.empty:
+            return
+        for i, col_name in enumerate(df.columns):
+            table.setColumnWidth(i, width_map.get(str(col_name), default_width))
 
     def _init_menubar(self) -> None:
         menubar = self.menuBar()
@@ -910,17 +1016,14 @@ class MainWindow(QMainWindow):
         c_layout.addLayout(search_bar)
 
         self.model_f02_cases = DataFrameTableModel()
-        self.proxy_f02_cases = QSortFilterProxyModel(self)
-        self.proxy_f02_cases.setSourceModel(self.model_f02_cases)
-        self.proxy_f02_cases.setFilterCaseSensitivity(Qt.CaseInsensitive)
-        self.proxy_f02_cases.setFilterKeyColumn(-1)
 
         self.table_f02_cases = QTableView()
-        self.table_f02_cases.setModel(self.proxy_f02_cases)
-        self._configure_table(self.table_f02_cases, stretch_last=True)
+        self.table_f02_cases.setModel(self.model_f02_cases)
+        self._configure_table(self.table_f02_cases, stretch_last=True, interactive_columns=True)
         # Sembunyikan vertical header agar tidak menampilkan nomor baris acak saat disortir
         self.table_f02_cases.verticalHeader().setVisible(False)
         self.table_f02_cases.setSortingEnabled(True)
+        self.table_f02_cases.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self.table_f02_cases.doubleClicked.connect(lambda _: self._on_inspect_from_f02())
         c_layout.addWidget(self.table_f02_cases)
         splitter.addWidget(grp_cases)
@@ -987,15 +1090,12 @@ class MainWindow(QMainWindow):
         gt_layout.addLayout(ctrl_bar)
 
         self.model_117_cases = DataFrameTableModel()
-        self.proxy_117_cases = QSortFilterProxyModel(self)
-        self.proxy_117_cases.setSourceModel(self.model_117_cases)
-        self.proxy_117_cases.setFilterCaseSensitivity(Qt.CaseInsensitive)
-        self.proxy_117_cases.setFilterKeyColumn(-1)
 
         self.table_117_cases = QTableView()
-        self.table_117_cases.setModel(self.proxy_117_cases)
-        self._configure_table(self.table_117_cases, stretch_last=True)
+        self.table_117_cases.setModel(self.model_117_cases)
+        self._configure_table(self.table_117_cases, stretch_last=True, interactive_columns=True)
         self.table_117_cases.setSortingEnabled(True)
+        self.table_117_cases.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self.table_117_cases.doubleClicked.connect(lambda _: self._on_inspect_from_117())
         gt_layout.addWidget(self.table_117_cases, stretch=1)
 
@@ -1133,15 +1233,12 @@ class MainWindow(QMainWindow):
         grp_cases = QGroupBox("F06 — Daftar Case && Pasangan Kejadian Pembukti Urutan (O_Cancelled pada Posisi i < O_Accepted pada Posisi j)")
         lc = QVBoxLayout(grp_cases)
         self.model_1122_cases = DataFrameTableModel()
-        self.proxy_1122_cases = QSortFilterProxyModel(self)
-        self.proxy_1122_cases.setSourceModel(self.model_1122_cases)
-        self.proxy_1122_cases.setFilterCaseSensitivity(Qt.CaseInsensitive)
-        self.proxy_1122_cases.setFilterKeyColumn(-1)
 
         self.table_1122_cases = QTableView()
-        self.table_1122_cases.setModel(self.proxy_1122_cases)
-        self._configure_table(self.table_1122_cases, stretch_last=True)
+        self.table_1122_cases.setModel(self.model_1122_cases)
+        self._configure_table(self.table_1122_cases, stretch_last=True, interactive_columns=True)
         self.table_1122_cases.setSortingEnabled(True)
+        self.table_1122_cases.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self.table_1122_cases.clicked.connect(self._on_select_1122_case)
         self.table_1122_cases.doubleClicked.connect(lambda _: self._on_inspect_from_1122())
         lc.addWidget(self.table_1122_cases)
@@ -1219,15 +1316,12 @@ class MainWindow(QMainWindow):
         grp_left = QGroupBox("Daftar Case Hasil Filter")
         ll = QVBoxLayout(grp_left)
         self.model_explorer_cases = DataFrameTableModel()
-        self.proxy_explorer_cases = QSortFilterProxyModel(self)
-        self.proxy_explorer_cases.setSourceModel(self.model_explorer_cases)
-        self.proxy_explorer_cases.setFilterCaseSensitivity(Qt.CaseInsensitive)
-        self.proxy_explorer_cases.setFilterKeyColumn(-1)
 
         self.table_explorer_cases = QTableView()
-        self.table_explorer_cases.setModel(self.proxy_explorer_cases)
-        self._configure_table(self.table_explorer_cases, stretch_last=True)
+        self.table_explorer_cases.setModel(self.model_explorer_cases)
+        self._configure_table(self.table_explorer_cases, stretch_last=True, interactive_columns=True)
         self.table_explorer_cases.setSortingEnabled(True)
+        self.table_explorer_cases.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self.table_explorer_cases.clicked.connect(self._on_explorer_case_clicked)
         ll.addWidget(self.table_explorer_cases)
         splitter.addWidget(grp_left)
@@ -1655,6 +1749,23 @@ class MainWindow(QMainWindow):
             "Penjelasan 7.3: Penawaran lama dibatalkan (O_Cancelled), lalu penawaran baru diterima (O_Accepted)",
         )
         self.model_1122_cases.set_dataframe(r22.case_summary_df)
+        self._apply_column_widths(
+            self.table_1122_cases,
+            r22.case_summary_df,
+            {
+                "case_id": 145,
+                "cancelled_trace_pos": 115,
+                "cancelled_timestamp": 140,
+                "cancelled_offer_id": 125,
+                "accepted_trace_pos": 115,
+                "accepted_timestamp": 140,
+                "accepted_offer_id": 125,
+                "intervening_events_count": 120,
+                "time_between_days": 120,
+                "trace_end_activity": 165,
+                "case_duration_days": 115,
+            },
+        )
         cols_ev = [
             c for c in ["case:concept:name", "_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "OfferID", "EventID"]
             if c in r22.evidence_events_df.columns
@@ -1676,7 +1787,7 @@ class MainWindow(QMainWindow):
     # INTERACTIVE FILTER & DRILL-DOWN HANDLERS
     # ------------------------------------------------------------------
     def _on_filter_f02_cases(self, text: str) -> None:
-        self.proxy_f02_cases.setFilterFixedString(text)
+        self.model_f02_cases.set_filter_text(text)
 
     def _on_117_group_changed(self) -> None:
         if self.bundle is None:
@@ -1684,19 +1795,39 @@ class MainWindow(QMainWindow):
         idx = self.cmb_117_group.currentIndex()
         r = self.bundle.ex117
         if idx == 0:
-            self.model_117_cases.set_dataframe(r.sub_c.case_df)
+            df = r.sub_c.case_df
         elif idx == 1:
-            self.model_117_cases.set_dataframe(r.sub_d.case_df)
+            df = r.sub_d.case_df
         elif idx == 2:
-            self.model_117_cases.set_dataframe(r.sub_e.case_df)
+            df = r.sub_e.case_df
         else:
-            self.model_117_cases.set_dataframe(r.sub_a.case_df)
+            df = r.sub_a.case_df
+        self.model_117_cases.set_dataframe(df)
+        self._apply_column_widths(
+            self.table_117_cases,
+            df,
+            {
+                "case_id": 145,
+                "event_count": 85,
+                "start_timestamp": 140,
+                "end_timestamp": 140,
+                "first_activity": 165,
+                "last_activity": 165,
+                "duration_seconds": 105,
+                "duration_hours": 100,
+                "duration_days": 115,
+                "minmax_duration_days": 115,
+                "speed_category": 130,
+                "trigger_activity": 145,
+                "trigger_count": 95,
+            },
+        )
 
     def _on_filter_117_table(self, text: str) -> None:
-        self.proxy_117_cases.setFilterFixedString(text)
+        self.model_117_cases.set_filter_text(text)
 
     def _on_filter_1122_table(self, text: str) -> None:
-        self.proxy_1122_cases.setFilterFixedString(text)
+        self.model_1122_cases.set_filter_text(text)
 
     def _on_select_1115_case(self, index: QModelIndex) -> None:
         if self.bundle is None or not index.isValid():
@@ -1771,9 +1902,11 @@ class MainWindow(QMainWindow):
     def _on_select_1122_case(self, index: QModelIndex) -> None:
         if self.bundle is None or not index.isValid():
             return
-        src_idx = self.proxy_1122_cases.mapToSource(index)
         df_22 = self.model_1122_cases.get_dataframe()
-        cid = str(df_22.iloc[src_idx.row()]["case_id"])
+        row = index.row()
+        if df_22.empty or row < 0 or row >= len(df_22):
+            return
+        cid = str(df_22.iloc[row]["case_id"])
         ev = self.bundle.context.get_case_events(cid)
         cols = [c for c in ["_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "OfferID", "EventID"] if c in ev.columns]
         self.model_1122_evidence.set_dataframe(
@@ -1787,7 +1920,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # CASE EXPLORER NAVIGATION (F07)
     # ------------------------------------------------------------------
-    def _get_selected_case_id_from_table(self, table: QTableView, proxy: Optional[QSortFilterProxyModel], model: DataFrameTableModel) -> Optional[str]:
+    def _get_selected_case_id_from_table(self, table: QTableView, proxy: Optional[Any], model: DataFrameTableModel) -> Optional[str]:
         idxs = table.selectionModel().selectedRows()
         if not idxs:
             curr = table.currentIndex()
@@ -1804,12 +1937,12 @@ class MainWindow(QMainWindow):
         return str(df.iloc[row_idx][col])
 
     def _on_inspect_from_f02(self) -> None:
-        cid = self._get_selected_case_id_from_table(self.table_f02_cases, self.proxy_f02_cases, self.model_f02_cases)
+        cid = self._get_selected_case_id_from_table(self.table_f02_cases, None, self.model_f02_cases)
         if cid:
             self.open_case_in_explorer(cid, filter_group_index=0)
 
     def _on_inspect_from_117(self) -> None:
-        cid = self._get_selected_case_id_from_table(self.table_117_cases, self.proxy_117_cases, self.model_117_cases)
+        cid = self._get_selected_case_id_from_table(self.table_117_cases, None, self.model_117_cases)
         if cid:
             g_map = {0: 1, 1: 2, 2: 3, 3: 0}
             self.open_case_in_explorer(cid, filter_group_index=g_map.get(self.cmb_117_group.currentIndex(), 0))
@@ -1825,7 +1958,7 @@ class MainWindow(QMainWindow):
             self.open_case_in_explorer(cid, filter_group_index=5)
 
     def _on_inspect_from_1122(self) -> None:
-        cid = self._get_selected_case_id_from_table(self.table_1122_cases, self.proxy_1122_cases, self.model_1122_cases)
+        cid = self._get_selected_case_id_from_table(self.table_1122_cases, None, self.model_1122_cases)
         if cid:
             self.open_case_in_explorer(cid, filter_group_index=6)
 
@@ -1840,7 +1973,7 @@ class MainWindow(QMainWindow):
         self.txt_explorer_search.clear()
 
     def _on_explorer_search_changed(self, text: str) -> None:
-        self.proxy_explorer_cases.setFilterFixedString(text)
+        self.model_explorer_cases.set_filter_text(text)
 
     def _on_explorer_group_changed(self) -> None:
         if self.bundle is None:
@@ -1880,6 +2013,30 @@ class MainWindow(QMainWindow):
 
         self.lbl_explorer_rule_banner.setText(rule)
         self.model_explorer_cases.set_dataframe(df)
+        self._apply_column_widths(
+            self.table_explorer_cases,
+            df,
+            {
+                "case_id": 145,
+                "event_count": 85,
+                "duration_days": 115,
+                "case_duration_days": 115,
+                "speed_category": 130,
+                "first_activity": 160,
+                "last_activity": 160,
+                "duration_hours": 100,
+                "duration_seconds": 105,
+                "start_timestamp": 140,
+                "end_timestamp": 140,
+                "minmax_duration_days": 115,
+                "resource_id": 110,
+                "same_resource_completions": 135,
+                "total_case_completions": 125,
+                "complete_occurrences": 110,
+                "all_lifecycle_occurrences": 120,
+                "resources_involved": 160,
+            },
+        )
         if not df.empty:
             first_cid = str(df.iloc[0]["case_id"])
             self._display_case_trace_in_explorer(first_cid)
@@ -1887,10 +2044,10 @@ class MainWindow(QMainWindow):
     def _on_explorer_case_clicked(self, index: QModelIndex) -> None:
         if not index.isValid():
             return
-        src_idx = self.proxy_explorer_cases.mapToSource(index)
         df = self.model_explorer_cases.get_dataframe()
-        if not df.empty and 0 <= src_idx.row() < len(df):
-            cid = str(df.iloc[src_idx.row()]["case_id"])
+        row = index.row()
+        if not df.empty and 0 <= row < len(df):
+            cid = str(df.iloc[row]["case_id"])
             self._display_case_trace_in_explorer(cid)
 
     def _display_case_trace_in_explorer(self, case_id: str) -> None:
