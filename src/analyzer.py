@@ -51,6 +51,7 @@ class OverviewResult:
     slow_cases_mean_days: float
     activity_table: pd.DataFrame
     case_table: pd.DataFrame
+    lifecycle_counts: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -83,6 +84,7 @@ class Exercise117Result:
     overlap_c_and_d_count: int
     contains_cancelled_anywhere_count: int
     contains_cancelled_anywhere_mean_days: float
+    overlap_c_and_d_case_ids: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -102,6 +104,7 @@ class Exercise1115Result:
     example_excluded_events_df: pd.DataFrame
     case_summary_df: pd.DataFrame
     evidence_events_df: pd.DataFrame
+    excluded_case_ids: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -134,6 +137,7 @@ class Exercise1122Result:
     same_offer_id_matching_count: int
     case_summary_df: pd.DataFrame
     evidence_events_df: pd.DataFrame
+    excluded_case_ids: List[str] = field(default_factory=list)
 
 
 def analyze_overview(ctx: EventLogContext) -> OverviewResult:
@@ -185,6 +189,13 @@ def analyze_overview(ctx: EventLogContext) -> OverviewResult:
     if pd.isna(slow_mean):
         slow_mean = 0.0
 
+    if "lifecycle:transition" in df.columns and not df.empty:
+        lc_series = df["lifecycle:transition"].dropna().astype(str).str.strip().str.lower()
+        lc_vc = lc_series[lc_series != ""].value_counts()
+        lc_counts = {str(k): int(v) for k, v in lc_vc.items()}
+    else:
+        lc_counts = {}
+
     return OverviewResult(
         total_cases=total_cases,
         total_events=total_events,
@@ -207,6 +218,7 @@ def analyze_overview(ctx: EventLogContext) -> OverviewResult:
         slow_cases_mean_days=slow_mean,
         activity_table=ctx.activity_freq_df,
         case_table=cs,
+        lifecycle_counts=lc_counts,
     )
 
 
@@ -328,7 +340,8 @@ def analyze_exercise_11_7(ctx: EventLogContext) -> Exercise117Result:
         total_cases=total_cases,
     )
 
-    overlap_cd = len(set(cs_c.index).intersection(set(cs_d.index)))
+    overlap_ids = sorted(list(set(cs_c.index).intersection(set(cs_d.index))))
+    overlap_cd = len(overlap_ids)
     contains_canc_ids = df.loc[df[act_col] == "O_Cancelled", case_col].unique()
     cs_contains_canc = cs.loc[cs.index.intersection(contains_canc_ids)]
     contains_canc_mean = float(cs_contains_canc["duration_days"].mean()) if len(cs_contains_canc) > 0 else 0.0
@@ -342,6 +355,7 @@ def analyze_exercise_11_7(ctx: EventLogContext) -> Exercise117Result:
         overlap_c_and_d_count=overlap_cd,
         contains_cancelled_anywhere_count=len(cs_contains_canc),
         contains_cancelled_anywhere_mean_days=contains_canc_mean,
+        overlap_c_and_d_case_ids=[str(x) for x in overlap_ids],
     )
 
 
@@ -445,6 +459,7 @@ def analyze_exercise_11_15(
         example_excluded_events_df=example_excl_df,
         case_summary_df=case_summary_df,
         evidence_events_df=evidence_df,
+        excluded_case_ids=[str(x) for x in excluded_ids],
     )
 
 
@@ -499,9 +514,13 @@ def analyze_exercise_11_18(
         comp_events = act_events.copy()
 
     # Filter out empty/missing/placeholder resources explicitly
-    valid_res_mask = comp_events[res_col].apply(is_valid_resource)
-    valid_comp_events = comp_events[valid_res_mask].copy()
-    valid_comp_events["_clean_resource"] = valid_comp_events[res_col].astype(str).str.strip()
+    if comp_events.empty:
+        valid_comp_events = comp_events.copy()
+        valid_comp_events["_clean_resource"] = pd.Series(dtype=str)
+    else:
+        valid_res_mask = comp_events[res_col].apply(is_valid_resource).astype(bool)
+        valid_comp_events = comp_events[valid_res_mask].copy()
+        valid_comp_events["_clean_resource"] = valid_comp_events[res_col].astype(str).str.strip()
 
     # Group by (case_id, resource)
     pair_counts = valid_comp_events.groupby([case_col, "_clean_resource"], sort=False).size()

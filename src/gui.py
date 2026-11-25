@@ -1,4 +1,8 @@
-"""PySide6 Desktop GUI for BPIC17 Event Log Analysis (FBPM Chapter 11 Exercises)."""
+"""PySide6 Desktop GUI for BPIC17 Event Log Analysis (FBPM Chapter 11 Exercises).
+
+Redesigned according to the unified design specification (Dark Theme reference, 4 tabs,
+single visual focus per screen, giant answer numbers, and Lampiran A checklist drawer).
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,7 @@ import os
 import re
 import traceback
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -14,29 +19,43 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QModelIndex,
     QObject,
+    QPoint,
+    QRect,
+    QSize,
+    QSortFilterProxyModel,
     Qt,
     QThread,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QAction, QColor, QFont
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
+    QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
-    QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
+    QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTabWidget,
     QTableView,
     QTextBrowser,
@@ -57,633 +76,1290 @@ from .analyzer import (
     analyze_overview,
 )
 from .core import EventLogContext, ValidationReport, get_environment_info, load_and_validate_xes
-from .exporter import build_summary_dataframe, export_all_to_directory
+from .exporter import (
+    build_summary_dataframe,
+    export_all_to_directory,
+    generate_html_report,
+)
 from .synthetic import generate_synthetic_xes_file
 
+# ======================================================================
+# DESIGN TOKENS (LIGHT MODE SPECIFICATION)
+# ======================================================================
+NAVY = "#0B1F5C"
+YELLOW = "#FFC700"
+BG_CANVAS = "#F5F7FB"
+BG_CARD = "#FFFFFF"
+BG_SURFACE_MUTED = "#F8FAFC"
+BORDER = "#E2E8F0"
+TEXT_PRIMARY = "#0F172A"
+TEXT_MUTED = "#64748B"
+GREEN = "#16A34A"
+GREEN_BG = "#DCFCE7"
+GREEN_BORDER = "#86EFAC"
+RED = "#DC2626"
+RED_BG = "#FEE2E2"
+RED_BORDER = "#FCA5A5"
+AMBER_BG = "#FEF3C7"
+AMBER_TEXT = "#92400E"
+AMBER_BORDER = "#FCD34D"
+SELECTION_BG = "#EEF2FF"
+SELECTION_TEXT = "#1E3A8A"
+BLUE_LINK = "#2563EB"
+BLUE_BG = "#EFF6FF"
+BLUE_BORDER = "#BFDBFE"
 
-COLUMN_HEADER_MAP: Dict[str, str] = {
-    "case_id": "Case ID",
-    "case:concept:name": "Case ID",
-    "activity": "Nama Aktivitas",
-    "concept:name": "Aktivitas (concept:name)",
-    "event_count": "Jml Event",
-    "complete_event_count": "Event Complete",
-    "event_percentage": "% Event",
-    "event_pct": "% Event",
-    "case_count": "Jml Case",
-    "case_percentage": "% Case",
-    "case_pct": "% Case",
-    "unique_resources": "Jml Resource",
-    "start_timestamp": "Waktu Mulai",
-    "end_timestamp": "Waktu Selesai",
-    "first_activity": "Aktivitas Awal",
-    "last_activity": "Aktivitas Akhir",
-    "duration_seconds": "Durasi (Detik)",
-    "duration_hours": "Durasi (Jam)",
-    "duration_days": "Cycle Time (Hari)",
-    "case_duration_days": "Cycle Time (Hari)",
-    "complete_occurrences": "Jml Complete",
-    "all_lifecycle_occurrences": "Semua Lifecycle",
-    "resources_involved": "Resource Terlibat",
-    "resource_id": "Resource ID",
-    "org:resource": "Resource (org:resource)",
-    "same_resource_completions": "Complete (Resource Sama)",
-    "total_case_completions": "Total Complete Case",
-    "first_complete_time": "Complete Pertama",
-    "last_complete_time": "Complete Terakhir",
-    "_trace_pos": "Pos #",
-    "time:timestamp": "Timestamp",
-    "lifecycle:transition": "Lifecycle",
-    "cancelled_trace_pos": "Pos Cancelled (i)",
-    "cancelled_timestamp": "Waktu O_Cancelled",
-    "cancelled_offer_id": "OfferID Cancelled",
-    "accepted_trace_pos": "Pos Accepted (j)",
-    "accepted_timestamp": "Waktu O_Accepted",
-    "accepted_offer_id": "OfferID Accepted",
-    "intervening_events_count": "Jeda Event (j-i-1)",
-    "same_offer_id": "OfferID Sama?",
-    "OfferID": "Offer ID",
-    "EventID": "Event ID",
-    "EventOrigin": "Asal Event",
-    "Action": "Aksi",
-    "Jumlah Case Terpilih": "Case Terpilih",
-    "Denominator (Total Case Aktif)": "Denominator",
-    "Persentase Case (%)": "Persentase (%)",
-    "Mean Cycle Time (Hari)": "Mean (Hari)",
-    "Mean Cycle Time (Jam)": "Mean (Jam)",
-    "Median Cycle Time (Hari)": "Median (Hari)",
-}
+APP_STYLESHEET = f"""
+QMainWindow {{
+    background-color: {BG_CANVAS};
+    color: {TEXT_PRIMARY};
+}}
 
-TIMESTAMP_COLUMNS = {
-    "start_timestamp",
-    "end_timestamp",
-    "time:timestamp",
-    "first_complete_time",
-    "last_complete_time",
-    "cancelled_timestamp",
-    "accepted_timestamp",
-}
+QWidget {{
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    color: {TEXT_PRIMARY};
+}}
 
-ISO_TS_REGEX = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$")
-
-
-def format_timestamp_compact(val_str: str) -> str:
-    """Formats verbose ISO timestamps like '2016-10-06 13:57:04.099000+00:00' into '2016-10-06 13:57:04'."""
-    s = val_str.strip()
-    m = ISO_TS_REGEX.match(s)
-    if m:
-        return f"{m.group(1)} {m.group(2)}"
-    return s
-
-
-APP_STYLESHEET = """
-QMainWindow, QWidget {
-    background-color: #f1f5f9;
-    color: #0f172a;
-    font-family: "Segoe UI", "Inter", sans-serif;
-    font-size: 13px;
-}
-QMenuBar {
-    background-color: #ffffff;
-    border-bottom: 1px solid #e2e8f0;
-    padding: 3px 8px;
-    font-weight: 600;
-    color: #1e293b;
-}
-QMenuBar::item {
-    padding: 5px 10px;
-    border-radius: 4px;
+/* Universal Label reset: strictly transparent with zero borders */
+QLabel {{
     background: transparent;
-}
-QMenuBar::item:selected {
-    background-color: #eff6ff;
-    color: #1d4ed8;
-}
-QMenu {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
-    border-radius: 6px;
-    padding: 4px;
-}
-QMenu::item {
-    padding: 6px 24px 6px 12px;
-    border-radius: 4px;
-}
-QMenu::item:selected {
-    background-color: #eff6ff;
-    color: #1d4ed8;
-}
-QGroupBox {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
-    border-radius: 10px;
-    margin-top: 10px;
-    padding: 16px 12px 10px 12px;
-    font-weight: 700;
-    font-size: 13px;
-    color: #0f172a;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 12px;
-    top: 1px;
-    padding: 2px 8px;
-    background-color: #eff6ff;
-    color: #1e3a8a;
-    border: 1px solid #bfdbfe;
-    border-radius: 5px;
-}
-QFrame#MetricCard {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
-    border-radius: 10px;
-}
-QFrame#MetricCard QLabel {
+    border: none;
+    padding: 0px;
+    margin: 0px;
+}}
+
+/* Tab Bar */
+QTabWidget::pane {{
+    border: none;
+    background-color: {BG_CANVAS};
+}}
+
+QTabBar {{
+    background-color: {BG_CANVAS};
+    qproperty-drawBase: 0;
+}}
+
+QTabBar::tab {{
     background-color: transparent;
-}
-QFrame#HeaderBanner {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0f172a, stop:0.55 #1e3a8a, stop:1 #1d4ed8);
-    border: 1px solid #1e40af;
-    border-radius: 10px;
-}
-QLabel#BannerBadge {
-    background-color: rgba(255, 255, 255, 0.16);
-    color: #e0f2fe;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
-}
-QLabel#BannerTitle {
-    background-color: transparent;
-    color: #ffffff;
-    font-size: 18px;
-    font-weight: 700;
-}
-QLabel#BannerSubtitle {
-    background-color: transparent;
-    color: #bfdbfe;
-    font-size: 12px;
+    color: {TEXT_MUTED};
+    font-size: 15px;
     font-weight: 500;
-}
-QLabel#CardTitle {
-    color: #475569;
-    font-size: 11px;
+    padding: 10px 20px;
+    margin-right: 8px;
+    border: none;
+    border-bottom: 3px solid transparent;
+}}
+
+QTabBar::tab:selected {{
+    color: {TEXT_PRIMARY};
     font-weight: 700;
-    letter-spacing: 0.2px;
-}
-QLabel#CardValue {
-    color: #0f172a;
-    font-size: 19px;
-    font-weight: 800;
-}
-QLabel#CardSub {
-    color: #334155;
-    font-size: 11px;
-    font-weight: 500;
-}
-QPushButton {
-    background-color: #2563eb;
-    color: #ffffff;
-    border: 1px solid #1d4ed8;
-    border-radius: 6px;
-    padding: 7px 14px;
-    font-weight: 600;
-    font-size: 12px;
-}
-QPushButton:hover {
-    background-color: #1d4ed8;
-}
-QPushButton:pressed {
-    background-color: #1e40af;
-}
-QPushButton:disabled {
-    background-color: #cbd5e1;
-    color: #64748b;
-    border: 1px solid #94a3b8;
-}
-QPushButton#SecondaryBtn {
-    background-color: #f8fafc;
-    color: #1e293b;
-    border: 1px solid #cbd5e1;
-}
-QPushButton#SecondaryBtn:hover {
-    background-color: #e2e8f0;
-    border-color: #94a3b8;
-}
-QPushButton#BannerSecondaryBtn {
-    background-color: rgba(255, 255, 255, 0.14);
-    color: #ffffff;
-    border: 1px solid rgba(255, 255, 255, 0.32);
-}
-QPushButton#BannerSecondaryBtn:hover {
-    background-color: rgba(255, 255, 255, 0.24);
-}
-QPushButton#BannerSecondaryBtn:disabled {
-    background-color: rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.45);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-}
-QPushButton#SuccessBtn {
-    background-color: #059669;
-    color: #ffffff;
-    border: 1px solid #047857;
-}
-QPushButton#SuccessBtn:hover {
-    background-color: #047857;
-}
-QLineEdit, QComboBox {
-    background-color: #ffffff;
-    border: 1px solid #cbd5e1;
-    border-radius: 6px;
-    padding: 6px 10px;
-    color: #0f172a;
-    font-size: 12px;
-}
-QLineEdit:focus, QComboBox:focus {
-    border: 1px solid #2563eb;
-    background-color: #ffffff;
-}
-QTabWidget::pane {
-    border: 1px solid #cbd5e1;
-    background-color: #f8fafc;
+    border-bottom: 3px solid {BLUE_LINK};
+}}
+
+QTabBar::tab:hover:!selected {{
+    color: {TEXT_PRIMARY};
+}}
+
+/* Push Buttons */
+QPushButton {{
+    background-color: {BG_CARD};
+    color: {TEXT_PRIMARY};
+    border: 1px solid #CBD5E1;
     border-radius: 8px;
-    top: -1px;
-}
-QTabBar::tab {
-    background-color: #e2e8f0;
-    color: #475569;
-    padding: 8px 15px;
-    margin-right: 4px;
-    border: 1px solid #cbd5e1;
-    border-bottom: none;
-    border-top-left-radius: 7px;
-    border-top-right-radius: 7px;
-    font-weight: 600;
-    font-size: 12px;
-}
-QTabBar::tab:hover:!selected {
-    background-color: #dbeafe;
-    color: #1e3a8a;
-}
-QTabBar::tab:selected {
-    background-color: #1e3a8a;
-    color: #ffffff;
-    border-color: #1e3a8a;
-    font-weight: 700;
-}
-QTableView {
-    background-color: #ffffff;
-    alternate-background-color: #f8fafc;
-    border: 1px solid #cbd5e1;
-    border-radius: 6px;
-    gridline-color: #e2e8f0;
-    selection-background-color: #dbeafe;
-    selection-color: #1e3a8a;
-    font-size: 12px;
-}
-QHeaderView::section:horizontal {
-    background-color: #f1f5f9;
-    color: #1e293b;
-    padding: 7px 10px;
+    padding: 6px 14px;
+    font-weight: 500;
+    font-size: 13px;
+}}
+
+QPushButton:hover {{
+    background-color: #F1F5F9;
+    border-color: #94A3B8;
+}}
+
+QPushButton:pressed {{
+    background-color: #E2E8F0;
+}}
+
+QPushButton:disabled {{
+    color: #94A3B8;
+    border-color: #E2E8F0;
+    background-color: #F8FAFC;
+}}
+
+/* Form Controls */
+QLineEdit, QComboBox {{
+    background-color: {BG_CARD};
+    color: {TEXT_PRIMARY};
+    border: 1px solid #CBD5E1;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+}}
+
+QLineEdit:focus, QComboBox:focus {{
+    border: 1px solid {BLUE_LINK};
+}}
+
+QComboBox::drop-down {{
     border: none;
-    border-right: 1px solid #cbd5e1;
-    border-bottom: 2px solid #94a3b8;
-    font-weight: 700;
+    padding-right: 8px;
+}}
+
+QComboBox QAbstractItemView {{
+    background-color: {BG_CARD};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER};
+    selection-background-color: {SELECTION_BG};
+    selection-color: {SELECTION_TEXT};
+    padding: 4px;
+}}
+
+/* Tables */
+QTableView {{
+    background-color: {BG_CARD};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER};
+    border-radius: 10px;
+    gridline-color: transparent;
+    selection-background-color: {SELECTION_BG};
+    selection-color: {SELECTION_TEXT};
+    outline: none;
+    font-size: 13px;
+}}
+
+QTableView::item {{
+    padding: 6px 10px;
+    border-bottom: 1px solid {BORDER};
+}}
+
+QTableView::item:selected {{
+    background-color: {SELECTION_BG};
+    color: {SELECTION_TEXT};
+}}
+
+QHeaderView::section {{
+    background-color: {BG_SURFACE_MUTED};
+    color: {TEXT_MUTED};
     font-size: 12px;
-}
-QHeaderView::section:vertical {
-    background-color: #f8fafc;
-    color: #64748b;
-    padding: 0 6px;
+    font-weight: 600;
+    text-align: left;
     border: none;
-    border-right: 1px solid #e2e8f0;
-    border-bottom: 1px solid #e2e8f0;
-    font-size: 11px;
-    font-weight: 600;
-}
-QTextBrowser {
-    background-color: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    padding: 8px;
-}
-QSplitter::handle {
-    background-color: #cbd5e1;
-    border-radius: 2px;
-}
-QSplitter::handle:horizontal {
-    width: 5px;
-    margin: 2px 3px;
-}
-QSplitter::handle:vertical {
-    height: 5px;
-    margin: 3px 2px;
-}
-QSplitter::handle:hover {
-    background-color: #3b82f6;
-}
-QStatusBar {
-    background-color: #ffffff;
-    border-top: 1px solid #cbd5e1;
-    color: #334155;
-    font-weight: 600;
+    border-bottom: 1px solid {BORDER};
+    padding: 8px 10px;
+}}
+
+/* Scrollbars */
+QScrollBar:vertical {{
+    background: transparent;
+    width: 8px;
+    margin: 0;
+}}
+
+QScrollBar::handle:vertical {{
+    background: #CBD5E1;
+    border-radius: 4px;
+    min-height: 24px;
+}}
+
+QScrollBar::handle:vertical:hover {{
+    background: #94A3B8;
+}}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0;
+}}
+
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 8px;
+    margin: 0;
+}}
+
+QScrollBar::handle:horizontal {{
+    background: #CBD5E1;
+    border-radius: 4px;
+    min-width: 24px;
+}}
+
+QScrollBar::handle:horizontal:hover {{
+    background: #94A3B8;
+}}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0;
+}}
+
+/* Status Bar */
+QStatusBar {{
+    background-color: {BG_CARD};
+    color: {TEXT_MUTED};
+    border-top: 1px solid {BORDER};
     font-size: 12px;
-}
+    padding: 2px 12px;
+}}
 """
 
 
-class DataFrameTableModel(QAbstractTableModel):
-    """High-performance Qt TableModel backed by a pandas DataFrame (supports 31,509+ rows smoothly)."""
+# ======================================================================
+# HELPER FUNCTIONS
+# ======================================================================
+_ID_MONTHS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+
+
+def fmt_int(val: int) -> str:
+    """Formats an integer with Indonesian dot thousand separators."""
+    return f"{int(val):,}".replace(",", ".")
+
+
+def fmt_num(val: float, decimals: int = 2) -> str:
+    """Formats a float with Indonesian decimal comma and dot thousands."""
+    formatted = f"{float(val):,.{decimals}f}"
+    return formatted.replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def format_case_id_middle(full_id: str, max_len: int = 40) -> str:
+    """Preserves original Case ID; truncates in the middle only if longer than max_len."""
+    if not full_id:
+        return "—"
+    s = str(full_id)
+    if len(s) <= max_len:
+        return s
+    head = (max_len - 1) // 2
+    tail = max_len - 1 - head
+    return f"{s[:head]}…{s[-tail:]}"
+
+
+def shorten_case_id(full_id: str) -> str:
+    """Alias preserving original Case ID with middle truncation only for very long IDs."""
+    return format_case_id_middle(full_id, max_len=40)
+
+
+def format_short_date(ts_str: str) -> str:
+    """Formats timestamp string to compact Indonesian date like '5 Jan'."""
+    if not ts_str or ts_str in ("NaT", "None", "-", "—"):
+        return ""
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(ts_str).strip())
+    if m:
+        month_idx = int(m.group(2)) - 1
+        day = int(m.group(3))
+        if 0 <= month_idx < 12:
+            return f"{day} {_ID_MONTHS[month_idx]}"
+    return str(ts_str)[:10]
+
+
+def shorten_activity_name(act: str) -> str:
+    """Shortens long activity names for clean chip display."""
+    if not act:
+        return "-"
+    if "Assess potential fraud" in act or "Assess Potential Fraud" in act:
+        return "W_Assess"
+    if "Validate application" in act:
+        return "W_Validate"
+    if "Call after offers" in act:
+        return "W_Call"
+    return act
+
+
+def format_timestamp_compact(ts_str: str) -> str:
+    """Formats full timestamp string to compact readable format."""
+    if not ts_str or ts_str in ("NaT", "None", "-"):
+        return "-"
+    clean = re.sub(r"\+00:00$", "", ts_str)
+    parts = clean.split()
+    if len(parts) == 2:
+        date_part, time_part = parts
+        time_part = time_part[:5]  # HH:MM
+        return f"{date_part} {time_part}"
+    return clean[:16]
+
+
+# ======================================================================
+# REUSABLE BASE WIDGETS
+# ======================================================================
+class KartuAngka(QFrame):
+    """Reusable metric card: giant number + optional percentage, and single-line label below."""
+
+    clicked = Signal()
 
     def __init__(
         self,
-        df: Optional[pd.DataFrame] = None,
-        highlight_activities: Optional[List[str]] = None,
-        highlight_lifecycle: Optional[str] = None,
-        highlight_resource: Optional[str] = None,
-        parent: Optional[QObject] = None,
+        code: str = "",
+        value: str = "—",
+        pct: str = "",
+        label: str = "",
+        height: int = 104,
+        parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        self._source_df = df.copy().reset_index(drop=True) if df is not None else pd.DataFrame()
-        self._df = self._source_df
-        self.highlight_activities = [a.lower() for a in (highlight_activities or [])]
-        self.highlight_lifecycle = highlight_lifecycle.lower() if highlight_lifecycle else None
-        self.highlight_resource = highlight_resource.lower() if highlight_resource else None
-        self._bold_font = QFont("Segoe UI", 9, QFont.Bold)
-        self._filter_text: str = ""
-        self._search_corpus: Optional[pd.Series] = None
-        self._sort_col: int = -1
-        self._sort_order: Qt.SortOrder = Qt.AscendingOrder
-        self._col_names: List[str] = []
-        self._col_arrays: List[np.ndarray] = []
-        self._highlight_states: Optional[np.ndarray] = None
-        self._apply_filter_and_sort()
+        self.code = code
+        self.value = value
+        self.pct = pct
+        self.label = label
+        self.is_active = False
 
-    def set_dataframe(
-        self,
-        df: pd.DataFrame,
-        highlight_activities: Optional[List[str]] = None,
-        highlight_lifecycle: Optional[str] = None,
-        highlight_resource: Optional[str] = None,
-    ) -> None:
-        self.beginResetModel()
-        self._source_df = df.copy().reset_index(drop=True) if df is not None else pd.DataFrame()
-        self.highlight_activities = [a.lower() for a in (highlight_activities or [])]
-        self.highlight_lifecycle = highlight_lifecycle.lower() if highlight_lifecycle else None
-        self.highlight_resource = highlight_resource.lower() if highlight_resource else None
-        self._search_corpus = None
-        self._sort_col = -1
-        self._apply_filter_and_sort()
-        self.endResetModel()
+        self.setFixedHeight(height)
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self.setObjectName("KartuAngka")
 
-    def set_filter_text(self, text: str) -> None:
-        needle = text.strip().lower()
-        if needle == self._filter_text:
-            return
-        self.beginResetModel()
-        self._filter_text = needle
-        self._apply_filter_and_sort()
-        self.endResetModel()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(6)
 
-    def sort(self, column: int, order: Qt.SortOrder = Qt.AscendingOrder) -> None:
-        if self._source_df.empty or column < 0 or column >= len(self._source_df.columns):
-            return
-        self.beginResetModel()
-        self._sort_col = column
-        self._sort_order = order
-        self._apply_filter_and_sort()
-        self.endResetModel()
+        # Center row: Giant value + percentage
+        val_row = QHBoxLayout()
+        val_row.setContentsMargins(0, 0, 0, 0)
+        val_row.setSpacing(8)
 
-    def _apply_filter_and_sort(self) -> None:
-        if self._source_df.empty:
-            self._df = self._source_df
-            self._rebuild_cache()
-            return
+        self.lbl_val = QLabel(value)
+        self.lbl_val.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 28px; font-weight: 700;")
+        val_row.addWidget(self.lbl_val)
 
-        if self._filter_text:
-            if self._search_corpus is None:
-                parts = [self._source_df[c].astype(str).str.lower() for c in self._source_df.columns]
-                corpus = parts[0]
-                for p in parts[1:]:
-                    corpus = corpus.str.cat(p, sep="\t")
-                self._search_corpus = corpus
-            mask = self._search_corpus.str.contains(self._filter_text, regex=False, na=False)
-            view = self._source_df.loc[mask]
+        self.lbl_pct = QLabel(pct)
+        self.lbl_pct.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 15px; font-weight: 500;")
+        self.lbl_pct.setVisible(bool(pct))
+        val_row.addWidget(self.lbl_pct)
+        val_row.addStretch()
+        layout.addLayout(val_row)
+
+        # Bottom row: Single-line label ("11.7 C Berhasil" or "Case")
+        combined_label = f"{code} {label}".strip() if code else label
+        self.lbl_desc = QLabel(combined_label)
+        self.lbl_desc.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 13px; font-weight: 500;")
+        layout.addWidget(self.lbl_desc)
+
+        self._update_style()
+
+    def set_content(self, value: str, pct: str = "", label: Optional[str] = None, show_dot: bool = False) -> None:
+        self.value = value
+        self.pct = pct
+        self.lbl_val.setText(value)
+        self.lbl_pct.setText(pct)
+        self.lbl_pct.setVisible(bool(pct))
+        if label is not None:
+            self.label = label
+            combined_label = f"{self.code} {label}".strip() if self.code else label
+            self.lbl_desc.setText(combined_label)
+
+    def set_selected(self, selected: bool) -> None:
+        self.is_active = selected
+        self._update_style()
+
+    def _update_style(self) -> None:
+        if self.is_active:
+            self.setStyleSheet(
+                f"QFrame#KartuAngka {{ background-color: {SELECTION_BG}; "
+                f"border: 1.5px solid {BLUE_LINK}; border-radius: 12px; }}"
+                f"QLabel {{ background: transparent; border: none; }}"
+            )
         else:
-            view = self._source_df
+            self.setStyleSheet(
+                f"QFrame#KartuAngka {{ background-color: {BG_CARD}; "
+                f"border: 1px solid {BORDER}; border-radius: 12px; }}"
+                f"QFrame#KartuAngka:hover {{ border: 1px solid #CBD5E1; background-color: #F8FAFC; }}"
+                f"QLabel {{ background: transparent; border: none; }}"
+            )
 
-        if 0 <= self._sort_col < len(view.columns):
-            col_key = view.columns[self._sort_col]
-            asc = self._sort_order == Qt.AscendingOrder
-            try:
-                view = view.sort_values(by=col_key, ascending=asc, kind="mergesort", na_position="last")
-            except TypeError:
-                view = view.sort_values(
-                    by=col_key,
-                    ascending=asc,
-                    kind="mergesort",
-                    na_position="last",
-                    key=lambda s: s.astype(str),
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class ChipStatus(QFrame):
+    """Validation attribute chip showing status icon and attribute name."""
+
+    def __init__(self, name: str, is_required: bool = True, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.name = name
+        self.is_required = is_required
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setSpacing(6)
+
+        self.lbl_icon = QLabel("✓")
+        self.lbl_icon.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 700; color: {GREEN};")
+        layout.addWidget(self.lbl_icon)
+
+        self.lbl_text = QLabel(name)
+        self.lbl_text.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 500; color: {GREEN};")
+        layout.addWidget(self.lbl_text)
+
+        self.set_state(True)
+
+    def set_state(self, present: bool) -> None:
+        if present:
+            self.lbl_icon.setText("✓")
+            self.lbl_icon.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 700; color: {GREEN};")
+            self.lbl_text.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 500; color: {GREEN};")
+            self.setStyleSheet(
+                f"background-color: {GREEN_BG}; border: 1px solid {GREEN_BORDER}; border-radius: 8px;"
+            )
+        else:
+            if self.is_required:
+                self.lbl_icon.setText("✕")
+                self.lbl_icon.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 700; color: {RED};")
+                self.lbl_text.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 500; color: {RED};")
+                self.setStyleSheet(
+                    f"background-color: {RED_BG}; border: 1px solid {RED_BORDER}; border-radius: 8px;"
+                )
+            else:
+                self.lbl_icon.setText("—")
+                self.lbl_icon.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 700; color: {TEXT_MUTED};")
+                self.lbl_text.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 500; color: {TEXT_MUTED};")
+                self.setStyleSheet(
+                    f"background-color: {BG_SURFACE_MUTED}; border: 1px solid {BORDER}; border-radius: 8px;"
                 )
 
-        if view is self._source_df:
-            self._df = view
+
+class BadgeStatus(QLabel):
+    """Status badge for data import status (Valid / Memuat / Gagal)."""
+
+    def __init__(self, text: str = "Valid", status: str = "valid", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setFixedHeight(30)
+        self.setAlignment(Qt.AlignCenter)
+        self.set_status(status, text)
+
+    def set_status(self, status: str, text: str) -> None:
+        self.setText(text)
+        if status == "valid":
+            self.setStyleSheet(
+                f"background-color: {GREEN_BG}; color: {GREEN}; "
+                f"border: 1px solid {GREEN_BORDER}; border-radius: 8px; "
+                f"padding: 4px 14px; font-size: 13px; font-weight: 700;"
+            )
+        elif status == "busy":
+            self.setStyleSheet(
+                f"background-color: {BLUE_BG}; color: {BLUE_LINK}; "
+                f"border: 1px solid {BLUE_BORDER}; border-radius: 8px; "
+                f"padding: 4px 14px; font-size: 13px; font-weight: 700;"
+            )
         else:
-            self._df = view.reset_index(drop=True)
-        self._rebuild_cache()
+            self.setStyleSheet(
+                f"background-color: {RED_BG}; color: {RED}; "
+                f"border: 1px solid {RED_BORDER}; border-radius: 8px; "
+                f"padding: 4px 14px; font-size: 13px; font-weight: 700;"
+            )
 
-    def _rebuild_cache(self) -> None:
-        self._col_names = [str(c) for c in self._df.columns]
-        self._col_arrays = [self._df[c].to_numpy() for c in self._df.columns]
-        if not self.highlight_activities or self._df.empty or "concept:name" not in self._df.columns:
-            self._highlight_states = None
-            return
 
-        act_arr = self._df["concept:name"].to_numpy()
-        act_match = np.array(
-            [str(v).strip().lower() in self.highlight_activities for v in act_arr],
-            dtype=bool,
+class BarAktivitas(QWidget):
+    """Horizontal proportional activity frequency bar row (height 28px)."""
+
+    def __init__(self, name: str, count: int, max_count: int, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setFixedHeight(28)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(12)
+
+        self.lbl_name = QLabel(name)
+        self.lbl_name.setFixedWidth(180)
+        self.lbl_name.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 13px;")
+        self.lbl_name.setToolTip(name)
+        layout.addWidget(self.lbl_name)
+
+        # Bar canvas
+        ratio = count / max(max_count, 1)
+        self.pbar = QProgressBar()
+        self.pbar.setFixedHeight(10)
+        self.pbar.setTextVisible(False)
+        self.pbar.setRange(0, 100)
+        self.pbar.setValue(int(ratio * 100))
+        self.pbar.setStyleSheet(
+            f"QProgressBar {{ background-color: {BORDER}; border: none; border-radius: 5px; }} "
+            f"QProgressBar::chunk {{ background-color: {NAVY}; border-radius: 5px; }}"
         )
-        if not act_match.any():
-            self._highlight_states = np.zeros(len(self._df), dtype=np.int8)
+        layout.addWidget(self.pbar, stretch=1)
+
+        self.lbl_cnt = QLabel(str(count))
+        self.lbl_cnt.setFixedWidth(40)
+        self.lbl_cnt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_cnt.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 600;")
+        layout.addWidget(self.lbl_cnt)
+
+
+class StripAlur(QFrame):
+    """Horizontal trace evidence flow showing events and highlight chips."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("StripAlur")
+        self.setStyleSheet(
+            f"QFrame#StripAlur {{ background: transparent; border: none; "
+            f"border-top: 1px solid {BORDER}; border-bottom: 1px solid {BORDER}; }}"
+        )
+        self.setFixedHeight(54)
+
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(0, 8, 0, 8)
+        main_layout.setSpacing(12)
+
+        self.lbl_title = QLabel("Bukti:")
+        self.lbl_title.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-weight: 600; font-size: 14px;")
+        main_layout.addWidget(self.lbl_title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(38)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("background: transparent; border: none;")
+
+        self.flow_container = QWidget()
+        self.flow_container.setStyleSheet("background: transparent;")
+        self.flow_layout = QHBoxLayout(self.flow_container)
+        self.flow_layout.setContentsMargins(0, 0, 0, 0)
+        self.flow_layout.setSpacing(8)
+        self.flow_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        scroll.setWidget(self.flow_container)
+        main_layout.addWidget(scroll, stretch=1)
+
+    def set_trace(
+        self,
+        case_id: str,
+        events: List[Dict[str, Any]],
+        highlights: List[int],
+        show_resource_and_date: bool = False,
+    ) -> None:
+        short_id = format_case_id_middle(case_id, max_len=40) if case_id else "—"
+        self.lbl_title.setText(f"Bukti {short_id}:")
+        self.lbl_title.setToolTip(str(case_id) if case_id else "")
+
+        # Clear existing chips
+        while self.flow_layout.count():
+            item = self.flow_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        if not events:
+            lbl = QLabel("Tidak ada event pada case ini.")
+            lbl.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 13px;")
+            self.flow_layout.addWidget(lbl)
             return
 
-        exact_mask = act_match.copy()
-        if self.highlight_lifecycle and "lifecycle:transition" in self._df.columns:
-            lc_arr = self._df["lifecycle:transition"].to_numpy()
-            exact_mask &= np.array(
-                [str(v).strip().lower() == self.highlight_lifecycle for v in lc_arr],
-                dtype=bool,
-            )
-        if self.highlight_resource and "org:resource" in self._df.columns:
-            res_arr = self._df["org:resource"].to_numpy()
-            exact_mask &= np.array(
-                [str(v).strip().lower() == self.highlight_resource for v in res_arr],
-                dtype=bool,
-            )
+        for i, ev in enumerate(events):
+            act = str(ev.get("concept:name", "—"))
+            lc_raw = ev.get("lifecycle:transition", "")
+            lc = "" if pd.isna(lc_raw) else str(lc_raw).strip()
+            res_raw = ev.get("org:resource", "")
+            res = "" if pd.isna(res_raw) else str(res_raw).strip()
+            dt = format_short_date(str(ev.get("time:timestamp", "")))
+            is_hl = i in highlights
+            short_act = shorten_activity_name(act)
 
-        states = np.zeros(len(self._df), dtype=np.int8)
-        states[act_match] = 1
-        states[exact_mask] = 2
-        self._highlight_states = states
+            chip = QFrame()
+            chip_layout = QHBoxLayout(chip)
+            chip_layout.setContentsMargins(10, 4, 10, 4)
 
-    def get_dataframe(self) -> pd.DataFrame:
-        return self._df
+            parts = [short_act]
+            if lc:
+                parts.append(lc)
+            if show_resource_and_date or is_hl:
+                if res and res.lower() not in ("nan", "none", "null"):
+                    parts.append(res)
+                elif show_resource_and_date:
+                    parts.append("tanpa resource")
+                if dt:
+                    parts.append(dt)
+            txt = ", ".join(parts)
+
+            if is_hl:
+                chip.setStyleSheet(
+                    f"background-color: {AMBER_BG}; border: 1px solid {AMBER_BORDER}; border-radius: 6px;"
+                )
+                lbl_ev = QLabel(txt)
+                lbl_ev.setStyleSheet(f"background: transparent; border: none; color: {AMBER_TEXT}; font-weight: 600; font-size: 12px;")
+            else:
+                chip.setStyleSheet(
+                    f"background-color: {BG_SURFACE_MUTED}; border: 1px solid {BORDER}; border-radius: 6px;"
+                )
+                lbl_ev = QLabel(txt)
+                lbl_ev.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 12px;")
+
+            chip_layout.addWidget(lbl_ev)
+            self.flow_layout.addWidget(chip)
+
+            # Arrow connector (pengecualian tunggal StripAlur)
+            if i < len(events) - 1:
+                lbl_arrow = QLabel("→")
+                lbl_arrow.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 14px; font-weight: 700;")
+                self.flow_layout.addWidget(lbl_arrow)
+
+        self.flow_layout.addStretch()
+
+
+# ======================================================================
+# DATA MODELS & CUSTOM GRAPHICS FOR TABLES / CHARTS
+# ======================================================================
+class Simple3ColTableModel(QAbstractTableModel):
+    """Generic table model supporting left-aligned headers/cells, tooltips, and optional subtexts."""
+
+    def __init__(
+        self,
+        headers: List[str],
+        rows: List[List[Any]],
+        parent: Optional[QObject] = None,
+        subtexts: Optional[Dict[Tuple[int, int], str]] = None,
+        tooltips: Optional[Dict[Tuple[int, int], str]] = None,
+    ):
+        super().__init__(parent)
+        self._headers = headers
+        self._rows = rows
+        self._subtexts = subtexts or {}
+        self._tooltips = tooltips or {}
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        if parent.isValid():
-            return 0
-        return len(self._df)
+        return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        if parent.isValid():
-            return 0
-        return len(self._col_names)
-
-    def _row_highlight_state(self, row: int) -> int:
-        """Returns 2 for exact target match (yellow), 1 for partial activity match (soft blue), 0 otherwise."""
-        if self._highlight_states is None:
-            return 0
-        return int(self._highlight_states[row])
-
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
-        if not index.isValid() or self._df.empty:
-            return None
-
-        row = index.row()
-        col = index.column()
-        col_name = self._col_names[col]
-        val = self._col_arrays[col][row]
-
-        if role == Qt.DisplayRole:
-            if pd.isna(val):
-                return "-"
-            if isinstance(val, (bool, np.bool_)):
-                return "Ya" if val else "Tidak"
-            if isinstance(val, (float, np.floating)):
-                if "percentage" in col_name or "_pct" in col_name or "(%)" in col_name:
-                    return f"{float(val):,.2f}%" if abs(float(val)) >= 1.0 or float(val) == 0 else f"{float(val):,.4f}%"
-                if "hours" in col_name or "(Jam)" in col_name:
-                    return f"{float(val):,.2f}"
-                if "seconds" in col_name:
-                    return f"{float(val):,.1f}"
-                return f"{float(val):,.4f}"
-            if isinstance(val, (int, np.integer)):
-                return f"{int(val):,}"
-            s_val = str(val)
-            if col_name in TIMESTAMP_COLUMNS:
-                return format_timestamp_compact(s_val)
-            return s_val
-
-        if role == Qt.ToolTipRole:
-            if pd.isna(val):
-                return "-"
-            return f"{COLUMN_HEADER_MAP.get(col_name, col_name)}: {val}"
-
-        if role == Qt.BackgroundRole:
-            hl = self._row_highlight_state(row)
-            if hl == 2:
-                return QColor("#fef08a")  # Bright amber-yellow for primary evidence rows
-            if hl == 1:
-                return QColor("#e0f2fe")  # Soft sky-blue for secondary lifecycle rows
-            if col_name == "Jawaban Utama":
-                return QColor("#ecfdf5")
-            if col_name == "Kode Soal":
-                return QColor("#eff6ff")
-
-        if role == Qt.ForegroundRole:
-            hl = self._row_highlight_state(row)
-            if hl == 2:
-                return QColor("#713f12")
-            if hl == 1:
-                return QColor("#0c4a6e")
-            if col_name == "Jawaban Utama":
-                return QColor("#065f46")
-            if col_name in ("Kode Soal", "case_id", "case:concept:name"):
-                return QColor("#1e3a8a")
-            if col_name == "lifecycle:transition" and not pd.isna(val):
-                lc_v = str(val).strip().lower()
-                if lc_v == "complete":
-                    return QColor("#047857")
-                if lc_v in ("ate_abort", "withdraw"):
-                    return QColor("#b91c1c")
-                if lc_v in ("schedule", "start"):
-                    return QColor("#1d4ed8")
-
-        if role == Qt.FontRole:
-            if self._row_highlight_state(row) == 2:
-                return self._bold_font
-            if col_name in ("Jawaban Utama", "Kode Soal", "case_id"):
-                return self._bold_font
-
-        if role == Qt.TextAlignmentRole:
-            if col_name in ("Kode Soal", "_trace_pos", "cancelled_trace_pos", "accepted_trace_pos", "intervening_events_count", "same_offer_id"):
-                return int(Qt.AlignCenter)
-            if isinstance(val, (int, float, np.integer, np.floating)) and not isinstance(val, (bool, np.bool_)) and not pd.isna(val):
-                return int(Qt.AlignRight | Qt.AlignVCenter)
-            return int(Qt.AlignLeft | Qt.AlignVCenter)
-
-        return None
+        return len(self._headers)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole) -> Any:
-        if self._df.empty:
-            return None
         if orientation == Qt.Horizontal:
-            if 0 <= section < len(self._col_names):
-                raw_col = self._col_names[section]
-                if role == Qt.DisplayRole:
-                    return COLUMN_HEADER_MAP.get(raw_col, raw_col)
-                if role == Qt.ToolTipRole:
-                    return f"Kolom: {raw_col}"
-        else:
-            if role == Qt.DisplayRole:
-                return str(section + 1)
+            if role == Qt.DisplayRole and 0 <= section < len(self._headers):
+                return self._headers[section]
+            if role == Qt.TextAlignmentRole:
+                return int(Qt.AlignLeft | Qt.AlignVCenter)
+        return None
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+        if not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return None
+        r, c = index.row(), index.column()
+        val = self._rows[r][c]
+
+        if role == Qt.DisplayRole:
+            return str(val)
+        if role == Qt.UserRole:
+            return self._subtexts.get((r, c), "")
+        if role == Qt.ToolTipRole:
+            return self._tooltips.get((r, c), str(val))
+        if role == Qt.TextAlignmentRole:
+            return int(Qt.AlignLeft | Qt.AlignVCenter)
+        if role == Qt.FontRole and c == 0:
+            f = QFont()
+            f.setBold(True)
+            return f
+        if role == Qt.ForegroundRole:
+            s_val = str(val)
+            if s_val == "Ya":
+                return QColor(GREEN)
+            if "kosong" in s_val.lower() or "ditolak" in s_val.lower():
+                return QColor("#B45309")
+            if s_val == "Tidak":
+                return QColor(TEXT_MUTED)
         return None
 
 
-class MetricCard(QFrame):
-    """Reusable summary metric card widget with color accent and clean typography."""
+class ActivityLifecycleDelegate(QStyledItemDelegate):
+    """Draws activity name on top and lifecycle as subtle smaller text below in the same cell."""
 
-    def __init__(self, title: str, value: str = "-", subtitle: str = "", border_color: str = "#2563eb"):
-        super().__init__()
-        self.setObjectName("MetricCard")
-        self.setStyleSheet(
-            f"QFrame#MetricCard {{ "
-            f"background-color: #ffffff; "
-            f"border: 1px solid #cbd5e1; "
-            f"border-top: 3px solid {border_color}; "
-            f"border-left: 4px solid {border_color}; "
-            f"border-radius: 8px; "
-            f"}}"
-        )
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        painter.save()
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, QColor(SELECTION_BG))
+            text_color = QColor(SELECTION_TEXT)
+        else:
+            text_color = QColor(TEXT_PRIMARY)
+
+        act_text = str(index.data(Qt.DisplayRole) or "")
+        lc_text = str(index.data(Qt.UserRole) or "")
+
+        rect = option.rect.adjusted(10, 4, -10, -4)
+        f_main = QFont(option.font)
+        f_main.setPointSize(13)
+        painter.setFont(f_main)
+        painter.setPen(text_color)
+
+        if lc_text:
+            top_rect = QRect(rect.left(), rect.top(), rect.width(), 18)
+            bot_rect = QRect(rect.left(), rect.top() + 18, rect.width(), 16)
+            painter.drawText(top_rect, Qt.AlignLeft | Qt.AlignVCenter, act_text)
+
+            f_sub = QFont(option.font)
+            f_sub.setPointSize(12)
+            painter.setFont(f_sub)
+            painter.setPen(QColor(TEXT_MUTED))
+            painter.drawText(bot_rect, Qt.AlignLeft | Qt.AlignVCenter, lc_text)
+        else:
+            painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, act_text)
+
+        painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        lc_text = str(index.data(Qt.UserRole) or "")
+        return QSize(200, 42 if lc_text else 30)
+
+
+class HistogramDurasiWidget(QWidget):
+    """Simple histogram of case durations (days) with a vertical threshold line at day 45."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setFixedHeight(110)
+        self._durations: np.ndarray = np.array([], dtype=float)
+        self._threshold: float = 45.0
+
+    def set_durations(self, durations: List[float] | np.ndarray) -> None:
+        arr = np.asarray(durations, dtype=float)
+        arr = arr[~np.isnan(arr)]
+        self._durations = arr
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        pad_l, pad_r, pad_t, pad_b = 8, 8, 18, 22
+        plot_w = max(w - pad_l - pad_r, 10)
+        plot_h = max(h - pad_t - pad_b, 10)
+
+        if len(self._durations) == 0:
+            painter.setPen(QColor(TEXT_MUTED))
+            painter.drawText(self.rect(), Qt.AlignCenter, "Belum ada data durasi")
+            return
+
+        max_val = max(float(np.max(self._durations)), 50.0)
+        bins = 15
+        counts, edges = np.histogram(self._durations, bins=bins, range=(0.0, max_val))
+        max_cnt = max(int(np.max(counts)), 1)
+        bar_w = plot_w / bins
+
+        for i, cnt in enumerate(counts):
+            bh = (cnt / max_cnt) * plot_h
+            bx = pad_l + i * bar_w + 1.5
+            bw = max(bar_w - 3.0, 2.0)
+            by = pad_t + plot_h - bh
+            mid_edge = (edges[i] + edges[i + 1]) / 2.0
+            color = QColor(NAVY) if mid_edge < self._threshold else QColor("#94A3B8")
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+            if cnt > 0:
+                painter.drawRoundedRect(int(bx), int(by), int(bw), max(int(bh), 2), 2, 2)
+
+        # Baseline
+        painter.setPen(QPen(QColor(BORDER), 1))
+        painter.drawLine(pad_l, pad_t + plot_h, pad_l + plot_w, pad_t + plot_h)
+
+        # Vertical dashed threshold line at 45 days
+        tx = pad_l + (self._threshold / max_val) * plot_w
+        pen_dash = QPen(QColor(RED), 1.5, Qt.DashLine)
+        painter.setPen(pen_dash)
+        painter.drawLine(int(tx), pad_t - 4, int(tx), pad_t + plot_h)
+
+        f = painter.font()
+        f.setPointSize(12)
+        painter.setFont(f)
+        painter.setPen(QColor(RED))
+        label_x = min(int(tx) + 4, w - 58)
+        painter.drawText(label_x, pad_t + 8, "45 hari")
+
+        painter.setPen(QColor(TEXT_MUTED))
+        painter.drawText(pad_l, h - 4, "0")
+        max_lbl = f"{int(round(max_val))} hari"
+        painter.drawText(w - pad_r - 54, h - 4, max_lbl)
+
+
+class Corong1115Widget(QWidget):
+    """Clean 3-step horizontal funnel showing All Cases -> 11.15 -> 11.18."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(3)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
-        self.lbl_title = QLabel(title.upper())
-        self.lbl_title.setObjectName("CardTitle")
-        self.lbl_value = QLabel(value)
-        self.lbl_value.setObjectName("CardValue")
-        self.lbl_value.setWordWrap(True)
-        self.lbl_sub = QLabel(subtitle)
-        self.lbl_sub.setObjectName("CardSub")
-        self.lbl_sub.setStyleSheet(f"color: {border_color}; font-size: 11px; font-weight: 600;")
-        self.lbl_sub.setWordWrap(True)
+        title = QLabel("Corong penyaringan pengulangan dan resource")
+        title.setStyleSheet(f"background: transparent; border: none; font-size: 14px; font-weight: 700; color: {TEXT_PRIMARY};")
+        layout.addWidget(title)
 
-        layout.addWidget(self.lbl_title)
-        layout.addWidget(self.lbl_value)
-        layout.addWidget(self.lbl_sub)
+        self._rows: List[Tuple[QLabel, QProgressBar, QLabel]] = []
+        row_names = ["Seluruh case", "11.15 Fraud 2x", "11.18 Resource sama"]
+        for name in row_names:
+            r_layout = QHBoxLayout()
+            r_layout.setSpacing(12)
+            lbl_n = QLabel(name)
+            lbl_n.setFixedWidth(160)
+            lbl_n.setStyleSheet(f"background: transparent; border: none; font-size: 13px; color: {TEXT_PRIMARY};")
+            r_layout.addWidget(lbl_n)
 
-    def update_card(self, value: str, subtitle: str = "") -> None:
-        self.lbl_value.setText(value)
-        self.lbl_sub.setText(subtitle)
+            pbar = QProgressBar()
+            pbar.setFixedHeight(12)
+            pbar.setTextVisible(False)
+            pbar.setRange(0, 100)
+            pbar.setValue(0)
+            pbar.setStyleSheet(
+                f"QProgressBar {{ background-color: {BORDER}; border: none; border-radius: 6px; }} "
+                f"QProgressBar::chunk {{ background-color: {NAVY}; border-radius: 6px; }}"
+            )
+            r_layout.addWidget(pbar, stretch=1)
+
+            lbl_v = QLabel("—")
+            lbl_v.setFixedWidth(110)
+            lbl_v.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            lbl_v.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 600; color: {TEXT_PRIMARY};")
+            r_layout.addWidget(lbl_v)
+
+            layout.addLayout(r_layout)
+            self._rows.append((lbl_n, pbar, lbl_v))
+
+    def set_values(self, total: int, c15: int, c18: int, dec: int = 1) -> None:
+        denom = max(total, 1)
+        vals = [
+            (total, 100.0),
+            (c15, c15 / denom * 100.0),
+            (c18, c18 / denom * 100.0),
+        ]
+        for (_, pbar, lbl_v), (cnt, pct) in zip(self._rows, vals):
+            pbar.setValue(int(round(cnt / denom * 100.0)) if cnt == 0 or cnt / denom * 100.0 >= 1 else 1)
+            if cnt == 0:
+                pbar.setValue(0)
+            lbl_v.setText(f"{fmt_int(cnt)} ({fmt_num(pct, dec)}%)")
 
 
+# ======================================================================
+# DIALOGS (INFO, ABOUT, ACTIVITIES, FAST/SLOW, EXPORT)
+# ======================================================================
+class AboutDialog(QDialog):
+    """About dialog showing environment versions (PDF Section 7.1)."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Tentang BPIC17 Analyzer")
+        self.setFixedSize(480, 360)
+        self.setStyleSheet(f"background-color: {BG_CARD}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        title = QLabel("BPIC17 Event Log Analyzer")
+        title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "Aplikasi Desktop Process Mining untuk menjawab Latihan Bab 11 "
+            "Buku Fundamentals of Business Process Management (FBPM) menggunakan Python & PM4Py.\n\n"
+            "Tugas Proyek Tahap 1 Penambangan Data."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; line-height: 1.4;")
+        layout.addWidget(desc)
+
+        env = get_environment_info()
+        env_box = QFrame()
+        env_box.setStyleSheet(f"background-color: {BG_SURFACE_MUTED}; border: 1px solid {BORDER}; border-radius: 8px; padding: 12px;")
+        eb_layout = QVBoxLayout(env_box)
+        eb_layout.setSpacing(6)
+
+        for k, v in env.items():
+            row = QHBoxLayout()
+            lbl_k = QLabel(k)
+            lbl_k.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+            lbl_v = QLabel(str(v))
+            lbl_v.setStyleSheet(f"color: {TEXT_PRIMARY}; font-weight: 600; font-size: 12px;")
+            row.addWidget(lbl_k)
+            row.addStretch()
+            row.addWidget(lbl_v)
+            eb_layout.addLayout(row)
+        layout.addWidget(env_box)
+
+        layout.addStretch()
+        btn_close = QPushButton("Tutup")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close, alignment=Qt.AlignRight)
+
+
+class ActivityListDialog(QDialog):
+    """Dialog showing complete table of all activities."""
+
+    def __init__(self, df: pd.DataFrame, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Daftar Lengkap Frekuensi Aktivitas")
+        self.resize(720, 480)
+        self.setStyleSheet(f"background-color: {BG_CARD}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        title = QLabel(f"Seluruh Aktivitas ({len(df)} Aktivitas Unik)")
+        title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        table = QTableView()
+        headers = ["Aktivitas", "Jml Event", "Event Complete", "% Event", "Jml Case", "% Case"]
+        rows = []
+        for r in df.itertuples(index=False):
+            rows.append([
+                str(getattr(r, "activity", "—")),
+                fmt_int(getattr(r, "event_count", 0)),
+                fmt_int(getattr(r, "complete_event_count", 0)),
+                f"{fmt_num(float(getattr(r, 'event_pct', 0)), 2)}%",
+                fmt_int(getattr(r, "case_count", 0)),
+                f"{fmt_num(float(getattr(r, 'case_pct', 0)), 2)}%",
+            ])
+        model = Simple3ColTableModel(headers, rows, self)
+        table.setModel(model)
+        table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.verticalHeader().setVisible(False)
+        layout.addWidget(table)
+
+        btn_close = QPushButton("Tutup")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close, alignment=Qt.AlignRight)
+
+
+class CaseDurationDialog(QDialog):
+    """Dialog showing table of cases and durations with search filter."""
+
+    case_double_clicked = Signal(str)
+
+    def __init__(self, df: pd.DataFrame, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Daftar Case dan Durasi")
+        self.resize(760, 520)
+        self.setStyleSheet(f"background-color: {BG_CARD}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        top_row = QHBoxLayout()
+        title = QLabel("Daftar Case dan Durasi")
+        title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {TEXT_PRIMARY};")
+        top_row.addWidget(title)
+        top_row.addStretch()
+
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(180)
+        self._search_timer.timeout.connect(lambda: self._on_search(self.search.text()))
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Cari Case ID...")
+        self.search.setFixedWidth(240)
+        self.search.textChanged.connect(lambda _: self._search_timer.start())
+        top_row.addWidget(self.search)
+        layout.addLayout(top_row)
+
+        self.table = QTableView()
+        self._raw_df = df
+        self._populate_table(df)
+        self.table.doubleClicked.connect(self._on_row_double_click)
+        layout.addWidget(self.table)
+
+        hint = QLabel("Klik ganda baris case untuk membuka detailnya di Case Explorer.")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
+        layout.addWidget(hint)
+
+        btn_close = QPushButton("Tutup")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close, alignment=Qt.AlignRight)
+
+    def _populate_table(self, df: pd.DataFrame) -> None:
+        headers = ["Case ID", "Jml Event", "Durasi (Hari)", "Durasi (Jam)", "Aktivitas Awal", "Aktivitas Akhir"]
+        rows = [
+            [
+                str(r.case_id),
+                fmt_int(r.event_count),
+                f"{fmt_num(r.duration_days, 2)} hari",
+                f"{fmt_num(r.duration_hours, 2)} jam",
+                str(r.first_activity),
+                str(r.last_activity),
+            ]
+            for r in df.itertuples(index=False)
+        ]
+        model = Simple3ColTableModel(headers, rows, self)
+        self.table.setModel(model)
+        hh = self.table.horizontalHeader()
+        hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        for col_idx, w in enumerate((220, 75, 110, 105, 145)):
+            hh.setSectionResizeMode(col_idx, QHeaderView.Interactive)
+            self.table.setColumnWidth(col_idx, w)
+        hh.setSectionResizeMode(5, QHeaderView.Stretch)
+        self.table.verticalHeader().setVisible(False)
+
+    def _on_search(self, q: str) -> None:
+        if not q.strip():
+            self._populate_table(self._raw_df)
+        else:
+            filtered = self._raw_df[self._raw_df["case_id"].astype(str).str.contains(q.strip(), case=False, na=False)]
+            self._populate_table(filtered)
+
+    def _on_row_double_click(self, idx: QModelIndex) -> None:
+        model = self.table.model()
+        if model and idx.isValid():
+            cid = model.data(model.index(idx.row(), 0), Qt.DisplayRole)
+            if cid:
+                self.case_double_clicked.emit(str(cid))
+                self.accept()
+
+
+class FastSlowDialog(QDialog):
+    """Dialog showing Fast Cases (< 45 hr) vs Slow Cases (>= 45 hr)."""
+
+    def __init__(self, ov: OverviewResult, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Analisis Fast Cases vs Slow Cases (45 Hari)")
+        self.setFixedSize(500, 320)
+        self.setStyleSheet(f"background-color: {BG_CARD}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        title = QLabel("Fast Cases vs Slow Cases (Threshold: 45 Hari)")
+        title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "Mengacu pada Bab 11 FBPM (Example 11.10), kasus dikelompokkan menjadi:\n"
+            "Fast Cases: cycle time < 45 hari\n"
+            "Slow Cases: cycle time >= 45 hari"
+        )
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; line-height: 1.4;")
+        layout.addWidget(desc)
+
+        box = QFrame()
+        box.setStyleSheet(f"background-color: {BG_SURFACE_MUTED}; border: 1px solid {BORDER}; border-radius: 8px; padding: 14px;")
+        blayout = QGridLayout(box)
+        blayout.setSpacing(12)
+
+        blayout.addWidget(QLabel("Fast Cases (< 45 hari):"), 0, 0)
+        lbl_fast = QLabel(f"<b>{ov.fast_cases_count:,} case</b> ({ov.fast_cases_pct:.1f}%)")
+        lbl_fast.setStyleSheet(f"color: {GREEN};")
+        blayout.addWidget(lbl_fast, 0, 1)
+
+        blayout.addWidget(QLabel("Slow Cases (>= 45 hari):"), 1, 0)
+        lbl_slow = QLabel(f"<b>{ov.slow_cases_count:,} case</b> ({ov.slow_cases_pct:.1f}%)")
+        lbl_slow.setStyleSheet(f"color: {YELLOW};")
+        blayout.addWidget(lbl_slow, 1, 1)
+
+        blayout.addWidget(QLabel("Total Denominator:"), 2, 0)
+        blayout.addWidget(QLabel(f"{ov.total_cases:,} case (100%)"), 2, 1)
+
+        layout.addWidget(box)
+        layout.addStretch()
+
+        btn = QPushButton("Tutup")
+        btn.clicked.connect(self.accept)
+        layout.addWidget(btn, alignment=Qt.AlignRight)
+
+
+class ExportDialog(QDialog):
+    """Export modal dialog with 3 choices (Summary CSV, Selected Cases CSV, HTML Report)."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Ekspor Hasil Analisis")
+        self.setFixedWidth(480)
+        self.setStyleSheet(f"background-color: {BG_CARD}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        title = QLabel("Pilih Jenis Ekspor")
+        title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        desc = QLabel("Pilih format berkas yang ingin diekspor dari hasil analisis saat ini:")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
+        layout.addWidget(desc)
+
+        self.btn_group = QButtonGroup(self)
+
+        self.r1 = QRadioButton("Ringkasan jawaban latihan (CSV)")
+        self.r1.setChecked(True)
+        self.r1.setStyleSheet(f"font-size: 14px; font-weight: 500; padding: 6px;")
+        self.btn_group.addButton(self.r1, 1)
+        layout.addWidget(self.r1)
+
+        self.r2 = QRadioButton("Daftar case terpilih per soal (CSV)")
+        self.r2.setStyleSheet(f"font-size: 14px; font-weight: 500; padding: 6px;")
+        self.btn_group.addButton(self.r2, 2)
+        layout.addWidget(self.r2)
+
+        self.r3 = QRadioButton("Laporan lengkap & analitis (HTML)")
+        self.r3.setStyleSheet(f"font-size: 14px; font-weight: 500; padding: 6px;")
+        self.btn_group.addButton(self.r3, 3)
+        layout.addWidget(self.r3)
+
+        layout.addSpacing(8)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_cancel = QPushButton("Batal")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_cancel)
+
+        self.btn_save = QPushButton("Simpan...")
+        self.btn_save.setStyleSheet(
+            f"background-color: {YELLOW}; color: {NAVY}; font-weight: 700; border: none;"
+        )
+        self.btn_save.clicked.connect(self.accept)
+        btn_row.addWidget(self.btn_save)
+        layout.addLayout(btn_row)
+
+    def get_selected_option(self) -> int:
+        return self.btn_group.checkedId()
+
+
+# ======================================================================
+# CHECKLIST DRAWER (LAMPIRAN A)
+# ======================================================================
+class ChecklistDrawer(QFrame):
+    """Right-side sliding drawer panel for Lampiran A demonstration checklist."""
+
+    navigate_to_tab = Signal(int)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setFixedWidth(360)
+        self.setObjectName("ChecklistDrawer")
+        self.setStyleSheet(
+            f"QFrame#ChecklistDrawer {{ background-color: {BG_CARD}; "
+            f"border-left: 1px solid {BORDER}; }}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        # Header: Title + Close button
+        header = QHBoxLayout()
+        title = QLabel("Checklist demo")
+        title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT_PRIMARY};")
+        header.addWidget(title)
+
+        header.addStretch()
+
+        btn_close = QPushButton("✕")
+        btn_close.setFixedSize(28, 28)
+        btn_close.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; color: {TEXT_MUTED}; "
+            f"font-size: 16px; font-weight: 700; }} QPushButton:hover {{ color: {TEXT_PRIMARY}; }}"
+        )
+        btn_close.clicked.connect(self.hide)
+        header.addWidget(btn_close)
+        layout.addLayout(header)
+
+        # Progress bar + ratio label
+        self.lbl_progress = QLabel("0 dari 10 item selesai")
+        self.lbl_progress.setStyleSheet(f"color: {GREEN}; font-size: 13px; font-weight: 600;")
+        layout.addWidget(self.lbl_progress)
+
+        self.pbar = QProgressBar()
+        self.pbar.setFixedHeight(8)
+        self.pbar.setTextVisible(False)
+        self.pbar.setRange(0, 10)
+        self.pbar.setValue(0)
+        self.pbar.setStyleSheet(
+            f"QProgressBar {{ background-color: {BORDER}; border: none; border-radius: 4px; }} "
+            f"QProgressBar::chunk {{ background-color: {GREEN}; border-radius: 4px; }}"
+        )
+        layout.addWidget(self.pbar)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        c_layout = QVBoxLayout(container)
+        c_layout.setContentsMargins(0, 0, 0, 0)
+        c_layout.setSpacing(10)
+
+        # 10 checklist items (tanpa penomoran dekoratif)
+        self.items_data = [
+            ("Aplikasi dibuka tanpa modifikasi kode", True, 0),
+            ("BPIC17 XES diimpor dan overview tampil", False, 0),
+            ("11.7 A dan B terjawab", False, 1),
+            ("11.7 C, D, E menampilkan filter, jumlah, durasi", False, 1),
+            ("11.15 menampilkan case dengan fraud 2x complete", False, 2),
+            ("11.18 menampilkan bukti resource sama", False, 2),
+            ("11.22 menampilkan count, persentase, order", False, 3),
+            ("Case Explorer dan ekspor CSV berfungsi", False, 4),
+            ("Log sintetis edge cases dimuat", False, 0),
+            ("Seluruh anggota dapat menjelaskan bagiannya", False, 0),
+        ]
+
+        self.checkboxes: List[QCheckBox] = []
+        for i, (text, default_val, target_tab) in enumerate(self.items_data):
+            row = QHBoxLayout()
+            cb = QCheckBox(text)
+            cb.setChecked(default_val)
+            cb.setStyleSheet(f"QCheckBox {{ color: {TEXT_PRIMARY}; font-size: 13px; spacing: 8px; }}")
+            if i < 9:
+                cb.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                cb.setFocusPolicy(Qt.NoFocus)
+            else:
+                cb.stateChanged.connect(lambda _: self._recompute_progress())
+
+            row.addWidget(cb, stretch=1)
+
+            if i in (1, 2, 3, 4, 5, 6, 7):
+                btn_goto = QPushButton("Buka")
+                btn_goto.setFixedSize(50, 24)
+                btn_goto.setStyleSheet(
+                    f"background-color: transparent; border: none; color: {BLUE_LINK}; font-size: 12px; font-weight: 600;"
+                )
+                btn_goto.clicked.connect(lambda _, t=target_tab: self.navigate_to_tab.emit(t))
+                row.addWidget(btn_goto)
+
+            self.checkboxes.append(cb)
+            c_layout.addLayout(row)
+
+        c_layout.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+
+        self._recompute_progress()
+
+    def update_states(
+        self,
+        has_data: bool = False,
+        has_analysis: bool = False,
+        is_synthetic: bool = False,
+        exported: bool = False,
+    ) -> None:
+        self.checkboxes[0].setChecked(True)  # Item 1 always true
+        self.checkboxes[1].setChecked(has_data)
+        self.checkboxes[2].setChecked(has_analysis)
+        self.checkboxes[3].setChecked(has_analysis)
+        self.checkboxes[4].setChecked(has_analysis)
+        self.checkboxes[5].setChecked(has_analysis)
+        self.checkboxes[6].setChecked(has_analysis)
+        if exported:
+            self.checkboxes[7].setChecked(True)
+        self.checkboxes[8].setChecked(is_synthetic)
+        self._recompute_progress()
+
+    def _recompute_progress(self) -> None:
+        done = sum(1 for cb in self.checkboxes if cb.isChecked())
+        total = len(self.checkboxes)
+        self.pbar.setValue(done)
+        self.lbl_progress.setText(f"{done} dari {total} item selesai")
+
+    def get_progress_text(self) -> str:
+        done = sum(1 for cb in self.checkboxes if cb.isChecked())
+        return f"{done}/10"
+
+
+# ======================================================================
+# DATA CONTAINER BUNDLE & WORKER THREAD
+# ======================================================================
 @dataclass
 class FullAnalysisBundle:
-    """Holds all computed outputs from a background worker run."""
+    """Immutable bundle containing all analysis results for FBPM Chapter 11."""
+
     context: EventLogContext
     report: ValidationReport
     overview: OverviewResult
@@ -694,9 +1370,9 @@ class FullAnalysisBundle:
 
 
 class AnalysisWorker(QThread):
-    """Background worker thread so XES import and analysis never freeze the desktop UI (Section 7.1)."""
+    """Background worker thread so XES import and analysis never freeze the desktop UI."""
 
-    progress_changed = Signal(str)
+    progress_changed = Signal(int, str)
     finished_bundle = Signal(object)
     failed_error = Signal(str)
 
@@ -708,8 +1384,10 @@ class AnalysisWorker(QThread):
     def run(self) -> None:
         try:
             if self.existing_context is None:
+                self.progress_changed.emit(15, "Membaca XES...")
                 ctx, report = load_and_validate_xes(
-                    self.file_path, progress_callback=self.progress_changed.emit
+                    self.file_path,
+                    progress_callback=lambda msg: self.progress_changed.emit(40, msg),
                 )
                 if not report.is_valid or ctx is None:
                     self.failed_error.emit(report.error_message or "Gagal memvalidasi berkas XES.")
@@ -718,19 +1396,19 @@ class AnalysisWorker(QThread):
                 ctx = self.existing_context
                 report = ctx.report
 
-            self.progress_changed.emit("Menjalankan F02: Event Log Overview & Statistika Dasar...")
+            self.progress_changed.emit(60, "Menghitung ringkasan...")
             ov = analyze_overview(ctx)
 
-            self.progress_changed.emit("Menjalankan F03: Analisis Exercise 11.7 (A–E)...")
+            self.progress_changed.emit(75, "Menghitung Exercise 11.7...")
             r117 = analyze_exercise_11_7(ctx)
 
-            self.progress_changed.emit("Menjalankan F04: Analisis Exercise 11.15 (Repeated Complete)...")
+            self.progress_changed.emit(85, "Menghitung Exercise 11.15...")
             r1115 = analyze_exercise_11_15(ctx)
 
-            self.progress_changed.emit("Menjalankan F05: Analisis Exercise 11.18 (Same Resource)...")
-            r1118 = analyze_exercise_11_18(ctx, res_1115=r1115)
+            self.progress_changed.emit(92, "Menghitung Exercise 11.18...")
+            r1118 = analyze_exercise_11_18(ctx)
 
-            self.progress_changed.emit("Menjalankan F06: Analisis Exercise 11.22 (Eventually Follows)...")
+            self.progress_changed.emit(97, "Menghitung Exercise 11.22...")
             r1122 = analyze_exercise_11_22(ctx)
 
             bundle = FullAnalysisBundle(
@@ -742,757 +1420,1405 @@ class AnalysisWorker(QThread):
                 ex1118=r1118,
                 ex1122=r1122,
             )
-            self.progress_changed.emit("Analisis selesai.")
+            self.progress_changed.emit(100, "Siap")
             self.finished_bundle.emit(bundle)
         except Exception as exc:
-            tb = traceback.format_exc()
-            self.failed_error.emit(f"Terjadi kesalahan saat memproses event log:\n{exc}\n\n{tb}")
+            self.failed_error.emit(f"Kesalahan saat analisis: {str(exc)}\n{traceback.format_exc()}")
 
 
+# ======================================================================
+# MAIN APPLICATION WINDOW
+# ======================================================================
 class MainWindow(QMainWindow):
-    """Main Desktop GUI Window for BPIC17 Event Log Analysis."""
+    """Main Application Window for BPIC17 Analyzer (PySide6 Desktop)."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Aplikasi Desktop Analisis Event Log BPIC17 — Bab 11 FBPM (Python & PM4Py)")
-        self.resize(1380, 880)
+        self.setWindowTitle("BPIC17 Event Log Desktop Analyzer")
+        self.resize(1280, 800)
+        self.setMinimumSize(1100, 700)
         self.setStyleSheet(APP_STYLESHEET)
 
         self.bundle: Optional[FullAnalysisBundle] = None
         self.worker: Optional[AnalysisWorker] = None
+        self.has_exported: bool = False
+        self.f02_unit: str = "hari"  # "hari", "jam", "detik"
+        self.f02_precision: int = 2
+        self.selected_117_sub: str = "11.7 A"
+        self.selected_1518_sub: str = "11.15"
 
-        self._init_menubar()
-        self._init_ui()
+        self._setup_ui()
 
-    @staticmethod
-    def _configure_table(
-        table: QTableView,
-        stretch_last: bool = True,
-        word_wrap: bool = False,
-        row_height: int = 28,
-        interactive_columns: bool = False,
-    ) -> None:
-        """Applies consistent modern table styling, smooth scrolling, and column sizing."""
-        table.setAlternatingRowColors(True)
-        table.setSelectionBehavior(QTableView.SelectRows)
-        table.setSelectionMode(QAbstractItemView.SingleSelection)
-        table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        table.setWordWrap(word_wrap)
-        table.setShowGrid(True)
-        vh = table.verticalHeader()
-        vh.setDefaultSectionSize(row_height)
-        vh.setMinimumSectionSize(24)
-        hh = table.horizontalHeader()
-        if interactive_columns:
-            hh.setSectionResizeMode(QHeaderView.Interactive)
-            hh.setDefaultSectionSize(125)
-            hh.setMinimumSectionSize(60)
-        else:
-            hh.setSectionResizeMode(QHeaderView.ResizeToContents)
-        hh.setStretchLastSection(stretch_last)
-        hh.setHighlightSections(False)
-
-    @staticmethod
-    def _apply_column_widths(
-        table: QTableView,
-        df: pd.DataFrame,
-        width_map: Dict[str, int],
-        default_width: int = 120,
-    ) -> None:
-        if df.empty:
-            return
-        for i, col_name in enumerate(df.columns):
-            table.setColumnWidth(i, width_map.get(str(col_name), default_width))
-
-    def _init_menubar(self) -> None:
-        menubar = self.menuBar()
-
-        file_menu = menubar.addMenu("&Berkas")
-        act_open = QAction("Impor File XES (.xes / .xes.gz)...", self)
-        act_open.triggered.connect(self.on_browse_xes)
-        file_menu.addAction(act_open)
-
-        act_bpic = QAction("Muat Dataset Utama BPIC17 (BPI Challenge 2017.xes.gz)", self)
-        act_bpic.triggered.connect(self.on_load_default_bpic17)
-        file_menu.addAction(act_bpic)
-
-        act_syn = QAction("Muat Log Sintetis Pengujian Edge Cases (10 Case)", self)
-        act_syn.triggered.connect(self.on_load_synthetic_log)
-        file_menu.addAction(act_syn)
-
-        file_menu.addSeparator()
-        act_export = QAction("Ekspor Semua Hasil ke Folder (CSV && HTML)...", self)
-        act_export.triggered.connect(self.on_export_all)
-        file_menu.addAction(act_export)
-
-        file_menu.addSeparator()
-        act_exit = QAction("Keluar", self)
-        act_exit.triggered.connect(self.close)
-        file_menu.addAction(act_exit)
-
-        help_menu = menubar.addMenu("&Bantuan")
-        act_about = QAction("Tentang Aplikasi && Versi Dependency (Reproducibility)", self)
-        act_about.triggered.connect(self.on_show_about)
-        help_menu.addAction(act_about)
-
-    def _init_ui(self) -> None:
+    def _setup_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(12, 10, 12, 10)
-        main_layout.setSpacing(8)
+        root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        # Top header banner
-        banner = QFrame()
-        banner.setObjectName("HeaderBanner")
-        b_layout = QHBoxLayout(banner)
-        b_layout.setContentsMargins(16, 10, 16, 10)
-        b_layout.setSpacing(10)
+        # Main vertical content container
+        content_container = QWidget()
+        c_layout = QVBoxLayout(content_container)
+        c_layout.setContentsMargins(0, 0, 0, 0)
+        c_layout.setSpacing(0)
 
-        title_box = QVBoxLayout()
-        title_box.setSpacing(3)
+        # 1. Header (height 64px, deep navy #0B1F5C)
+        self._setup_header(c_layout)
 
-        top_title_row = QHBoxLayout()
-        top_title_row.setSpacing(8)
-        lbl_badge = QLabel("PROCESS MINING • PM4PY")
-        lbl_badge.setObjectName("BannerBadge")
-        lbl_title = QLabel("BPIC17 Event Log Desktop Analyzer — Latihan Bab 11 FBPM")
-        lbl_title.setObjectName("BannerTitle")
-        top_title_row.addWidget(lbl_badge)
-        top_title_row.addWidget(lbl_title)
-        top_title_row.addStretch(1)
-
-        self.lbl_active_dataset = QLabel(
-            "Dataset Aktif: Belum ada file XES dimuat  •  Silakan klik 'Muat BPIC17 (.xes.gz)', 'Impor XES...', atau 'Muat Log Sintetis'"
-        )
-        self.lbl_active_dataset.setObjectName("BannerSubtitle")
-        title_box.addLayout(top_title_row)
-        title_box.addWidget(self.lbl_active_dataset)
-        b_layout.addLayout(title_box, stretch=1)
-
-        self.btn_top_import = QPushButton("Impor XES...")
-        self.btn_top_import.clicked.connect(self.on_browse_xes)
-        self.btn_top_bpic = QPushButton("Muat BPIC17 (.xes.gz)")
-        self.btn_top_bpic.setObjectName("SuccessBtn")
-        self.btn_top_bpic.clicked.connect(self.on_load_default_bpic17)
-        self.btn_top_synth = QPushButton("Muat Log Sintetis (Edge Cases)")
-        self.btn_top_synth.setObjectName("BannerSecondaryBtn")
-        self.btn_top_synth.clicked.connect(self.on_load_synthetic_log)
-        self.btn_top_rerun = QPushButton("Re-run Semua Analisis")
-        self.btn_top_rerun.setObjectName("BannerSecondaryBtn")
-        self.btn_top_rerun.setEnabled(False)
-        self.btn_top_rerun.clicked.connect(self.on_rerun_all)
-
-        b_layout.addWidget(self.btn_top_import)
-        b_layout.addWidget(self.btn_top_bpic)
-        b_layout.addWidget(self.btn_top_synth)
-        b_layout.addWidget(self.btn_top_rerun)
-        main_layout.addWidget(banner)
-
-        # Main Navigation Tabs (Following Section 6 minimum UI design)
+        # 2. Main Tabs (Data, Jawaban, Detail, Case Explorer)
         self.tabs = QTabWidget()
-        main_layout.addWidget(self.tabs, stretch=1)
+        self.tabs.setFixedHeight(44)
+        c_layout.addWidget(self._setup_tab_bar())
 
-        self._build_tab_f01_dataset()
-        self._build_tab_f02_overview()
-        self._build_tab_f03_ex117()
-        self._build_tab_f04_f05_ex1115_1118()
-        self._build_tab_f06_ex1122()
-        self._build_tab_f07_case_explorer()
-        self._build_tab_f07_export()
+        # Area isi tab (Stacked or QTabWidget content)
+        self.body_stack = QTabWidget()
+        self.body_stack.setObjectName("BodyStack")
+        self.body_stack.tabBar().setVisible(False)  # custom tab bar above
+        self.body_stack.setStyleSheet(f"QTabWidget#BodyStack {{ background-color: {BG_CANVAS}; border: none; }}")
 
-        # Bottom status bar with progress bar
+        self.tab_data = self._create_tab_data()
+        self.tab_117 = self._create_tab_117()
+        self.tab_1518 = self._create_tab_1115_1118()
+        self.tab_1122 = self._create_tab_1122()
+        self.tab_explorer = self._create_tab_explorer()
+
+        self.body_stack.addTab(self.tab_data, "Data")
+        self.body_stack.addTab(self.tab_117, "Exercise 11.7")
+        self.body_stack.addTab(self.tab_1518, "Exercise 11.15 & 11.18")
+        self.body_stack.addTab(self.tab_1122, "Exercise 11.22")
+        self.body_stack.addTab(self.tab_explorer, "Case Explorer")
+
+        c_layout.addWidget(self.body_stack, stretch=1)
+
+        root_layout.addWidget(content_container, stretch=1)
+
+        # 3. Right Checklist Drawer (Lampiran A)
+        self.drawer = ChecklistDrawer(self)
+        self.drawer.navigate_to_tab.connect(self._on_navigate_from_drawer)
+        self.drawer.hide()
+        root_layout.addWidget(self.drawer)
+
+        # 4. Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumWidth(260)
-        self.progress_bar.setVisible(False)
-        self.status_bar.addPermanentWidget(self.progress_bar)
-        self.status_bar.showMessage("Siap. Pilih file XES untuk memulai analisis.")
+        self.status_bar.showMessage("Siap. Silakan muat berkas XES.")
 
     # ------------------------------------------------------------------
-    # TAB 1: F01 — Impor & Validasi Event Log XES
+    # HEADER (Height 64px, #0B1F5C)
     # ------------------------------------------------------------------
-    def _build_tab_f01_dataset(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        cards_layout = QHBoxLayout()
-        cards_layout.setSpacing(10)
-        self.card_f01_status = MetricCard("Status Impor & Validasi", "Belum Dimuat", "Pilih file .xes / .xes.gz", "#2563eb")
-        self.card_f01_cases = MetricCard("Jumlah Unique Case (Trace)", "-", "Atribut: case:concept:name", "#059669")
-        self.card_f01_events = MetricCard("Jumlah Total Event", "-", "Baris kejadian dalam log", "#7c3aed")
-        self.card_f01_attrs = MetricCard("Deteksi Atribut Kunci", "-", "lifecycle:transition & org:resource", "#d97706")
-        cards_layout.addWidget(self.card_f01_status)
-        cards_layout.addWidget(self.card_f01_cases)
-        cards_layout.addWidget(self.card_f01_events)
-        cards_layout.addWidget(self.card_f01_attrs)
-        layout.addLayout(cards_layout)
-
-        grp_detail = QGroupBox("F01 — Rincian Validasi Atribut XES, Struktur Trace, && Lingkungan Reproduktibilitas")
-        g_layout = QVBoxLayout(grp_detail)
-        self.txt_f01_validation = QTextBrowser()
-        self.txt_f01_validation.setOpenExternalLinks(True)
-        env = get_environment_info()
-        self.txt_f01_validation.setHtml(
-            f"<div style='font-family:Segoe UI,sans-serif;padding:8px;color:#0f172a;'>"
-            f"<h3 style='color:#1e3a8a;margin-top:0;'>Selamat Datang di Aplikasi Analisis Event Log BPIC17</h3>"
-            f"<p>Gunakan tombol <b>Muat BPIC17 (.xes.gz)</b> di kanan atas untuk memuat dataset utama "
-            f"<code>BPI Challenge 2017.xes.gz</code>, atau klik <b>Impor XES...</b> untuk memilih berkas XES lain.</p>"
-            f"<p>Anda juga dapat menekan <b>Muat Log Sintetis (Edge Cases)</b> untuk menguji ke-8 skenario uji tepi pada Bagian 8 instruksi proyek.</p>"
-            f"<hr style='border:none;border-top:1px solid #cbd5e1;margin:12px 0;'>"
-            f"<p><b>Versi Lingkungan (Reproducibility):</b> Python {env['Python']} &bull; PM4Py {env['PM4Py']} &bull; "
-            f"Pandas {env['Pandas']} &bull; PySide6 {env['PySide6']} &bull; r4pm {env['r4pm (XES accelerator)']}</p>"
-            f"</div>"
+    def _setup_header(self, parent_layout: QVBoxLayout) -> None:
+        header = QFrame()
+        header.setObjectName("MainHeader")
+        header.setFixedHeight(64)
+        header.setStyleSheet(
+            f"QFrame#MainHeader {{ background-color: {NAVY}; border: none; }}"
         )
-        g_layout.addWidget(self.txt_f01_validation)
-        layout.addWidget(grp_detail, stretch=1)
 
-        self.tabs.addTab(tab, "1. Dataset && Validasi (F01)")
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(24, 0, 24, 0)
+        h_layout.setSpacing(16)
 
-    # ------------------------------------------------------------------
-    # TAB 2: F02 — Event Log Overview & Statistika Dasar
-    # ------------------------------------------------------------------
-    def _build_tab_f02_overview(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        # Left: Title + Filename
+        left_box = QVBoxLayout()
+        left_box.setSpacing(2)
+        left_box.setAlignment(Qt.AlignVCenter)
 
-        cards = QHBoxLayout()
-        cards.setSpacing(10)
-        self.card_f02_cases = MetricCard("Total Unique Case", "-", "Total trace dalam log", "#2563eb")
-        self.card_f02_events = MetricCard("Total Event & Aktivitas", "-", "Jumlah aktivitas unik", "#7c3aed")
-        self.card_f02_meandur = MetricCard("Rata-rata Cycle Time", "-", "Satuan hari, jam, & detik", "#059669")
-        self.card_f02_fastslow = MetricCard("Fast (<45 hr) vs Slow (>=45 hr)", "-", "Pengayaan Example 11.10", "#d97706")
-        cards.addWidget(self.card_f02_cases)
-        cards.addWidget(self.card_f02_events)
-        cards.addWidget(self.card_f02_meandur)
-        cards.addWidget(self.card_f02_fastslow)
-        layout.addLayout(cards)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        lbl_title = QLabel("BPIC17 Analyzer")
+        lbl_title.setStyleSheet("background: transparent; border: none; font-size: 18px; font-weight: 700; color: #FFFFFF;")
+        title_row.addWidget(lbl_title)
 
-        self.lbl_f02_timerange = QLabel("Rentang Waktu Event Log: -")
-        self.lbl_f02_timerange.setStyleSheet(
-            "background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; "
-            "font-weight: 600; color: #1e3a8a; padding: 6px 10px;"
+        btn_about = QPushButton("ⓘ")
+        btn_about.setFixedSize(22, 22)
+        btn_about.setCursor(QCursor(Qt.PointingHandCursor))
+        btn_about.setToolTip("Tentang Aplikasi & Informasi Lingkungan")
+        btn_about.setStyleSheet(
+            "QPushButton { background: transparent; border: 1px solid rgba(255,255,255,0.3); "
+            "border-radius: 11px; color: #FFFFFF; font-size: 12px; font-weight: 700; padding: 0; } "
+            "QPushButton:hover { background: rgba(255,255,255,0.15); }"
         )
-        layout.addWidget(self.lbl_f02_timerange)
+        btn_about.clicked.connect(self._show_about_dialog)
+        title_row.addWidget(btn_about)
+        title_row.addStretch()
+        left_box.addLayout(title_row)
 
-        splitter = QSplitter(Qt.Horizontal)
+        self.lbl_header_file = QLabel("Belum ada berkas dimuat")
+        self.lbl_header_file.setStyleSheet("background: transparent; border: none; font-size: 12px; color: #CBD5E1;")
+        left_box.addWidget(self.lbl_header_file)
+        h_layout.addLayout(left_box)
 
-        # Left: Activity frequency table
-        grp_act = QGroupBox("Frekuensi Aktivitas (Event Count, Complete Count, && Case Count)")
-        act_layout = QVBoxLayout(grp_act)
-        self.model_f02_act = DataFrameTableModel()
-        self.table_f02_act = QTableView()
-        self.table_f02_act.setModel(self.model_f02_act)
-        self._configure_table(self.table_f02_act, stretch_last=True)
-        act_layout.addWidget(self.table_f02_act)
-        splitter.addWidget(grp_act)
+        h_layout.addStretch()
 
-        # Right: Case duration table with search & unit precision
-        grp_cases = QGroupBox("Daftar Case && Durasi per Case (Klik Ganda untuk Buka di Case Explorer)")
-        c_layout = QVBoxLayout(grp_cases)
-        search_bar = QHBoxLayout()
-        lbl_f = QLabel("Filter Case:")
-        lbl_f.setStyleSheet("font-weight: 600; color: #334155;")
-        self.txt_f02_search = QLineEdit()
-        self.txt_f02_search.setPlaceholderText("Cari Case ID, aktivitas awal/akhir, atau kategori durasi...")
-        self.txt_f02_search.textChanged.connect(self._on_filter_f02_cases)
-        self.btn_f02_reset = QPushButton("Reset Filter")
-        self.btn_f02_reset.setObjectName("SecondaryBtn")
-        self.btn_f02_reset.setToolTip("Hapus teks pencarian dan tampilkan seluruh case")
-        self.btn_f02_reset.clicked.connect(lambda: self.txt_f02_search.clear())
-        btn_inspect_f02 = QPushButton("Buka Rincian Case Terpilih di Case Explorer")
-        btn_inspect_f02.clicked.connect(self._on_inspect_from_f02)
-
-        search_bar.addWidget(lbl_f)
-        search_bar.addWidget(self.txt_f02_search, stretch=1)
-        search_bar.addWidget(self.btn_f02_reset)
-        search_bar.addWidget(btn_inspect_f02)
-        c_layout.addLayout(search_bar)
-
-        self.model_f02_cases = DataFrameTableModel()
-
-        self.table_f02_cases = QTableView()
-        self.table_f02_cases.setModel(self.model_f02_cases)
-        self._configure_table(self.table_f02_cases, stretch_last=True, interactive_columns=True)
-        # Sembunyikan vertical header agar tidak menampilkan nomor baris acak saat disortir
-        self.table_f02_cases.verticalHeader().setVisible(False)
-        self.table_f02_cases.setSortingEnabled(True)
-        self.table_f02_cases.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
-        self.table_f02_cases.doubleClicked.connect(lambda _: self._on_inspect_from_f02())
-        c_layout.addWidget(self.table_f02_cases)
-        splitter.addWidget(grp_cases)
-        splitter.setSizes([500, 820])
-
-        layout.addWidget(splitter, stretch=1)
-        self.tabs.addTab(tab, "2. Overview && Statistika (F02)")
-
-    # ------------------------------------------------------------------
-    # TAB 3: F03 — Analisis Exercise 11.7 (A–E)
-    # ------------------------------------------------------------------
-    def _build_tab_f03_ex117(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-
-        cards = QHBoxLayout()
-        cards.setSpacing(8)
-        self.card_117a = MetricCard("11.7 A — Total Case", "-", "Unique case keseluruhan log", "#2563eb")
-        self.card_117b = MetricCard("11.7 B — Mean Cycle Time", "-", "Rata-rata durasi seluruh case", "#0284c7")
-        self.card_117c = MetricCard("11.7 C — Successful Cases", "-", "Contains('O_Accepted')", "#059669")
-        self.card_117d = MetricCard("11.7 D — Unsuccessful Cases", "-", "Contains('O_Refused')", "#dc2626")
-        self.card_117e = MetricCard("11.7 E — Canceled Cases", "-", "Endpoint == 'O_Cancelled'", "#d97706")
-        for c in (self.card_117a, self.card_117b, self.card_117c, self.card_117d, self.card_117e):
-            cards.addWidget(c)
-        layout.addLayout(cards)
-
-        self.lbl_117_rule_note = QLabel(
-            "Catatan Semantik Filter 11.7: 11.7 C dan 11.7 D menggunakan aturan 'Contains' (case memuat minimal 1 event O_Accepted / O_Refused, dihitung 1x per case), "
-            "sedangkan 11.7 E menggunakan aturan 'Endpoint' (event TERAKHIR pada urutan trace adalah O_Cancelled). Durasi tiap case dihitung dari trace utuh."
+        # Right: Checklist Chip, Ganti Data Dropdown, Ekspor Button
+        self.btn_checklist_chip = QPushButton("Checklist 0/10")
+        self.btn_checklist_chip.setFixedHeight(34)
+        self.btn_checklist_chip.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_checklist_chip.setStyleSheet(
+            "QPushButton { background-color: rgba(255, 255, 255, 0.08); "
+            "border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 8px; "
+            "color: #FFFFFF; font-size: 13px; font-weight: 600; padding: 0 14px; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.15); }"
         )
-        self.lbl_117_rule_note.setWordWrap(True)
-        self.lbl_117_rule_note.setStyleSheet(
-            "background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 8px 10px; color: #1e3a8a; font-weight: 500;"
+        self.btn_checklist_chip.clicked.connect(self._toggle_drawer)
+        h_layout.addWidget(self.btn_checklist_chip)
+
+        self.btn_ganti_data = QPushButton("Ganti data ▾")
+        self.btn_ganti_data.setFixedHeight(34)
+        self.btn_ganti_data.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_ganti_data.setStyleSheet(
+            "QPushButton { background-color: rgba(255, 255, 255, 0.12); "
+            "border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 8px; "
+            "color: #FFFFFF; font-size: 13px; font-weight: 600; padding: 0 14px; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.2); }"
         )
-        layout.addWidget(self.lbl_117_rule_note)
+        self.btn_ganti_data.clicked.connect(self._show_ganti_data_menu)
+        h_layout.addWidget(self.btn_ganti_data)
 
-        grp_table = QGroupBox("F03 — Daftar Case Terpilih per Sub-Soal Exercise 11.7 (Klik Ganda untuk Validasi di Case Explorer)")
-        gt_layout = QVBoxLayout(grp_table)
-
-        ctrl_bar = QHBoxLayout()
-        lbl_grp = QLabel("Kelompok Soal 11.7:")
-        lbl_grp.setStyleSheet("font-weight: 600; color: #334155;")
-        ctrl_bar.addWidget(lbl_grp)
-        self.cmb_117_group = QComboBox()
-        self.cmb_117_group.addItems([
-            "11.7 C — Successful Cases (Contains O_Accepted)",
-            "11.7 D — Unsuccessful Cases (Contains O_Refused)",
-            "11.7 E — Canceled Cases (Event Terakhir == O_Cancelled)",
-            "11.7 A & B — Seluruh Case Aktif",
-        ])
-        self.cmb_117_group.currentIndexChanged.connect(self._on_117_group_changed)
-        ctrl_bar.addWidget(self.cmb_117_group, stretch=1)
-
-        self.txt_117_search = QLineEdit()
-        self.txt_117_search.setPlaceholderText("Cari Case ID atau aktivitas awal/akhir...")
-        self.txt_117_search.textChanged.connect(self._on_filter_117_table)
-        ctrl_bar.addWidget(self.txt_117_search, stretch=1)
-
-        btn_inspect_117 = QPushButton("Buka Rincian Case && Validasi Kategori di Case Explorer")
-        btn_inspect_117.clicked.connect(self._on_inspect_from_117)
-        ctrl_bar.addWidget(btn_inspect_117)
-        gt_layout.addLayout(ctrl_bar)
-
-        self.model_117_cases = DataFrameTableModel()
-
-        self.table_117_cases = QTableView()
-        self.table_117_cases.setModel(self.model_117_cases)
-        self._configure_table(self.table_117_cases, stretch_last=True, interactive_columns=True)
-        self.table_117_cases.setSortingEnabled(True)
-        self.table_117_cases.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
-        self.table_117_cases.doubleClicked.connect(lambda _: self._on_inspect_from_117())
-        gt_layout.addWidget(self.table_117_cases, stretch=1)
-
-        layout.addWidget(grp_table, stretch=1)
-        self.tabs.addTab(tab, "3. Exercise 11.7 A–E (F03)")
-
-    # ------------------------------------------------------------------
-    # TAB 4: F04 & F05 — Exercise 11.15 & 11.18 (Repeated Complete & Same Resource)
-    # ------------------------------------------------------------------
-    def _build_tab_f04_f05_ex1115_1118(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-
-        cards = QHBoxLayout()
-        cards.setSpacing(10)
-        self.card_1115_ans = MetricCard("Jawaban Exercise 11.15", "-", "W_Assess potential fraud complete >= 2x", "#2563eb")
-        self.card_1115_excl = MetricCard("Bukti Filter Lifecycle Complete", "-", "Case >=2 event semua lifecycle vs complete-only", "#7c3aed")
-        self.card_1118_ans = MetricCard("Jawaban Exercise 11.18", "-", "Complete >= 2x oleh Resource Identik", "#059669")
-        self.card_1118_diff = MetricCard("Lolos 11.15 tapi Beda Resource", "-", "Selisih case antara 11.15 dan 11.18", "#d97706")
-        cards.addWidget(self.card_1115_ans)
-        cards.addWidget(self.card_1115_excl)
-        cards.addWidget(self.card_1118_ans)
-        cards.addWidget(self.card_1118_diff)
-        layout.addLayout(cards)
-
-        # Top split: Left = 11.15 table, Right = 11.18 table
-        top_splitter = QSplitter(Qt.Horizontal)
-
-        grp_1115 = QGroupBox("F04 — Daftar Case Lolos Exercise 11.15 (Complete >= 2x)")
-        l1115 = QVBoxLayout(grp_1115)
-        btn_row_15 = QHBoxLayout()
-        btn_inspect_15 = QPushButton("Periksa Jejak Case 11.15 di Case Explorer")
-        btn_inspect_15.clicked.connect(self._on_inspect_from_1115)
-        btn_show_excl = QPushButton("Contoh Case Tereliminasi Filter Complete-Only")
-        btn_show_excl.setObjectName("SecondaryBtn")
-        btn_show_excl.clicked.connect(self._on_show_excluded_lifecycle_case)
-        btn_row_15.addWidget(btn_inspect_15)
-        btn_row_15.addWidget(btn_show_excl)
-        l1115.addLayout(btn_row_15)
-
-        self.model_1115_cases = DataFrameTableModel()
-        self.table_1115_cases = QTableView()
-        self.table_1115_cases.setModel(self.model_1115_cases)
-        self._configure_table(self.table_1115_cases, stretch_last=True)
-        self.table_1115_cases.clicked.connect(self._on_select_1115_case)
-        self.table_1115_cases.doubleClicked.connect(lambda _: self._on_inspect_from_1115())
-        l1115.addWidget(self.table_1115_cases)
-        top_splitter.addWidget(grp_1115)
-
-        grp_1118 = QGroupBox("F05 — Daftar Case && Resource Lolos Exercise 11.18 (Complete >= 2x oleh Resource Sama)")
-        l1118 = QVBoxLayout(grp_1118)
-        btn_row_18 = QHBoxLayout()
-        btn_inspect_18 = QPushButton("Periksa Jejak Case 11.18 di Case Explorer")
-        btn_inspect_18.setObjectName("SuccessBtn")
-        btn_inspect_18.clicked.connect(self._on_inspect_from_1118)
-        btn_show_diff_res = QPushButton("Bukti 10 Case Lolos 11.15 (Resource Berbeda)")
-        btn_show_diff_res.setObjectName("SecondaryBtn")
-        btn_show_diff_res.clicked.connect(self._on_show_diff_resource_evidence)
-        btn_row_18.addWidget(btn_inspect_18)
-        btn_row_18.addWidget(btn_show_diff_res)
-        l1118.addLayout(btn_row_18)
-
-        self.model_1118_cases = DataFrameTableModel()
-        self.table_1118_cases = QTableView()
-        self.table_1118_cases.setModel(self.model_1118_cases)
-        self._configure_table(self.table_1118_cases, stretch_last=True)
-        self.table_1118_cases.clicked.connect(self._on_select_1118_case)
-        self.table_1118_cases.doubleClicked.connect(lambda _: self._on_inspect_from_1118())
-        l1118.addWidget(self.table_1118_cases)
-        top_splitter.addWidget(grp_1118)
-        top_splitter.setSizes([660, 660])
-
-        # Bottom panel: Evidence events table for selected case / group
-        grp_ev = QGroupBox("Bukti Event (Event Evidence) — Menampilkan Timestamp, Aktivitas, Lifecycle Transition, Resource, && EventID")
-        lev = QVBoxLayout(grp_ev)
-        self.lbl_15_18_evidence_title = QLabel("Klik salah satu case pada tabel 11.15 atau 11.18 di atas untuk memeriksa bukti event-nya.")
-        self.lbl_15_18_evidence_title.setWordWrap(True)
-        self.lbl_15_18_evidence_title.setStyleSheet(
-            "background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 10px; font-weight: 600; color: #1e3a8a;"
+        self.btn_ekspor = QPushButton("Ekspor")
+        self.btn_ekspor.setFixedHeight(34)
+        self.btn_ekspor.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_ekspor.setStyleSheet(
+            f"QPushButton {{ background-color: {YELLOW}; color: {NAVY}; "
+            f"border: none; border-radius: 8px; font-size: 13px; font-weight: 700; padding: 0 18px; }} "
+            f"QPushButton:hover {{ background-color: #E6B300; }}"
         )
-        lev.addWidget(self.lbl_15_18_evidence_title)
+        self.btn_ekspor.clicked.connect(self.on_export_dialog)
+        h_layout.addWidget(self.btn_ekspor)
 
-        self.model_15_18_evidence = DataFrameTableModel()
-        self.table_15_18_evidence = QTableView()
-        self.table_15_18_evidence.setModel(self.model_15_18_evidence)
-        self._configure_table(self.table_15_18_evidence, stretch_last=True)
-        lev.addWidget(self.table_15_18_evidence)
+        parent_layout.addWidget(header)
 
-        v_split = QSplitter(Qt.Vertical)
-        v_split.addWidget(top_splitter)
-        v_split.addWidget(grp_ev)
-        v_split.setSizes([370, 270])
-
-        layout.addWidget(v_split, stretch=1)
-        self.tabs.addTab(tab, "4. Exercise 11.15 && 11.18 (F04–F05)")
-
-    # ------------------------------------------------------------------
-    # TAB 5: F06 — Exercise 11.22 (O_Cancelled Eventually Followed By O_Accepted)
-    # ------------------------------------------------------------------
-    def _build_tab_f06_ex1122(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-
-        cards = QHBoxLayout()
-        cards.setSpacing(10)
-        self.card_1122_ans = MetricCard("Jawaban Exercise 11.22 (Jumlah Case)", "-", "O_Cancelled diikuti O_Accepted (i < j)", "#2563eb")
-        self.card_1122_pct = MetricCard("Persentase terhadap Total Case Aktif", "-", "Denominator ditampilkan eksplisit", "#059669")
-        self.card_1122_rev = MetricCard("Urutan Terbalik Saja (Tidak Lolos)", "-", "O_Accepted sebelum O_Cancelled tanpa accepted lagi", "#d97706")
-        self.card_1122_offer = MetricCard("Analisis Tambahan Level OfferID (Bagian 7.3)", "-", "Pasangan pada OfferID yang sama vs beda OfferID", "#7c3aed")
-        cards.addWidget(self.card_1122_ans)
-        cards.addWidget(self.card_1122_pct)
-        cards.addWidget(self.card_1122_rev)
-        cards.addWidget(self.card_1122_offer)
-        layout.addLayout(cards)
-
-        ctrl = QHBoxLayout()
-        self.txt_1122_search = QLineEdit()
-        self.txt_1122_search.setPlaceholderText("Cari Case ID atau Offer ID pada hasil 11.22...")
-        self.txt_1122_search.textChanged.connect(self._on_filter_1122_table)
-        btn_inspect_22 = QPushButton("Buka Timeline Lengkap Case di Case Explorer")
-        btn_inspect_22.clicked.connect(self._on_inspect_from_1122)
-        lbl_c22 = QLabel("Cari Case 11.22:")
-        lbl_c22.setStyleSheet("font-weight: 600; color: #334155;")
-        ctrl.addWidget(lbl_c22)
-        ctrl.addWidget(self.txt_1122_search, stretch=1)
-        ctrl.addWidget(btn_inspect_22)
-        layout.addLayout(ctrl)
-
-        v_split = QSplitter(Qt.Vertical)
-
-        grp_cases = QGroupBox("F06 — Daftar Case && Pasangan Kejadian Pembukti Urutan (O_Cancelled pada Posisi i < O_Accepted pada Posisi j)")
-        lc = QVBoxLayout(grp_cases)
-        self.model_1122_cases = DataFrameTableModel()
-
-        self.table_1122_cases = QTableView()
-        self.table_1122_cases.setModel(self.model_1122_cases)
-        self._configure_table(self.table_1122_cases, stretch_last=True, interactive_columns=True)
-        self.table_1122_cases.setSortingEnabled(True)
-        self.table_1122_cases.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
-        self.table_1122_cases.clicked.connect(self._on_select_1122_case)
-        self.table_1122_cases.doubleClicked.connect(lambda _: self._on_inspect_from_1122())
-        lc.addWidget(self.table_1122_cases)
-        v_split.addWidget(grp_cases)
-
-        grp_tl = QGroupBox("Timeline Event O_Cancelled && O_Accepted pada Case Terpilih")
-        ltl = QVBoxLayout(grp_tl)
-        self.lbl_1122_timeline_info = QLabel("Pilih sebuah case pada tabel di atas untuk melihat urutan event O_Cancelled -> O_Accepted beserta OfferID-nya.")
-        self.lbl_1122_timeline_info.setWordWrap(True)
-        self.lbl_1122_timeline_info.setStyleSheet(
-            "background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 10px; font-weight: 600; color: #1e3a8a;"
+    def _setup_tab_bar(self) -> QWidget:
+        bar_widget = QFrame()
+        bar_widget.setFixedHeight(44)
+        bar_widget.setStyleSheet(
+            f"background-color: {BG_CANVAS}; border-bottom: 1px solid {BORDER};"
         )
-        ltl.addWidget(self.lbl_1122_timeline_info)
 
-        self.model_1122_evidence = DataFrameTableModel()
-        self.table_1122_evidence = QTableView()
-        self.table_1122_evidence.setModel(self.model_1122_evidence)
-        self._configure_table(self.table_1122_evidence, stretch_last=True)
-        ltl.addWidget(self.table_1122_evidence)
-        v_split.addWidget(grp_tl)
-        v_split.setSizes([370, 250])
+        layout = QHBoxLayout(bar_widget)
+        layout.setContentsMargins(24, 0, 24, 0)
+        layout.setSpacing(12)
 
-        layout.addWidget(v_split, stretch=1)
-        self.tabs.addTab(tab, "5. Exercise 11.22 (F06)")
+        self.tab_buttons: List[QPushButton] = []
+        tab_names = ["Data", "Exercise 11.7", "Exercise 11.15 && 11.18", "Exercise 11.22", "Case Explorer"]
+
+        for i, name in enumerate(tab_names):
+            btn = QPushButton(name)
+            btn.setFixedHeight(44)
+            btn.setCursor(QCursor(Qt.PointingHandCursor))
+            btn.clicked.connect(lambda _, idx=i: self._set_active_tab(idx))
+            self.tab_buttons.append(btn)
+            layout.addWidget(btn)
+
+        layout.addStretch()
+        self._update_tab_button_styles(0)
+        return bar_widget
+
+    def _set_active_tab(self, idx: int) -> None:
+        self.body_stack.setCurrentIndex(idx)
+        self._update_tab_button_styles(idx)
+
+    def _update_tab_button_styles(self, active_idx: int) -> None:
+        for i, btn in enumerate(self.tab_buttons):
+            if i == active_idx:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background: transparent; border: none; "
+                    f"border-bottom: 3px solid {BLUE_LINK}; color: {TEXT_PRIMARY}; "
+                    f"font-size: 15px; font-weight: 700; padding: 0 16px; border-radius: 0; }}"
+                )
+            else:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background: transparent; border: none; "
+                    f"border-bottom: 3px solid transparent; color: {TEXT_MUTED}; "
+                    f"font-size: 15px; font-weight: 500; padding: 0 16px; border-radius: 0; }} "
+                    f"QPushButton:hover {{ color: {TEXT_PRIMARY}; }}"
+                )
 
     # ------------------------------------------------------------------
-    # TAB 6: F07 — Case Explorer & Jejak Analisis
+    # TAB 1: DATA (F01 & F02 — Bagian Dhimas)
     # ------------------------------------------------------------------
-    def _build_tab_f07_case_explorer(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+    def _create_tab_data(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
 
-        top_bar = QHBoxLayout()
-        lbl_fk = QLabel("Filter Kelompok Analisis:")
-        lbl_fk.setStyleSheet("font-weight: 600; color: #334155;")
-        top_bar.addWidget(lbl_fk)
-        self.cmb_explorer_filter = QComboBox()
-        self.cmb_explorer_filter.addItems([
-            "Semua Case Aktif (Overview)",
-            "Exercise 11.7 C — Successful Cases (Contains O_Accepted)",
-            "Exercise 11.7 D — Unsuccessful Cases (Contains O_Refused)",
-            "Exercise 11.7 E — Canceled Cases (Event Terakhir == O_Cancelled)",
-            "Exercise 11.15 — W_Assess potential fraud Complete >= 2x",
-            "Exercise 11.18 — W_Assess potential fraud Complete >= 2x oleh Resource Sama",
-            "Exercise 11.22 — O_Cancelled Diikuti O_Accepted (i < j)",
-        ])
-        self.cmb_explorer_filter.currentIndexChanged.connect(self._on_explorer_group_changed)
-        top_bar.addWidget(self.cmb_explorer_filter, stretch=1)
+        # Top: Status row (Badge + Progress Bar + Dimuat X dtk)
+        status_card = QFrame()
+        status_card.setStyleSheet(f"background-color: transparent;")
+        s_layout = QHBoxLayout(status_card)
+        s_layout.setContentsMargins(0, 0, 0, 0)
+        s_layout.setSpacing(14)
 
-        lbl_cc = QLabel("Cari Case ID:")
-        lbl_cc.setStyleSheet("font-weight: 600; color: #334155;")
-        top_bar.addWidget(lbl_cc)
-        self.txt_explorer_search = QLineEdit()
-        self.txt_explorer_search.setPlaceholderText("Ketik Case ID (mis. Application_1221917431)...")
-        self.txt_explorer_search.textChanged.connect(self._on_explorer_search_changed)
-        top_bar.addWidget(self.txt_explorer_search, stretch=1)
+        self.badge_status = BadgeStatus("Valid", "valid")
+        s_layout.addWidget(self.badge_status)
 
-        btn_reset_exp = QPushButton("Reset Filter")
-        btn_reset_exp.setObjectName("SecondaryBtn")
-        btn_reset_exp.clicked.connect(self._on_reset_explorer)
-        top_bar.addWidget(btn_reset_exp)
-        layout.addLayout(top_bar)
-
-        self.lbl_explorer_rule_banner = QLabel("Aturan Filter Aktif: Menampilkan seluruh case pada event log.")
-        self.lbl_explorer_rule_banner.setWordWrap(True)
-        self.lbl_explorer_rule_banner.setStyleSheet(
-            "background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 7px 12px; font-weight: 600; color: #1e3a8a;"
+        self.pbar_load = QProgressBar()
+        self.pbar_load.setFixedHeight(8)
+        self.pbar_load.setTextVisible(False)
+        self.pbar_load.setRange(0, 100)
+        self.pbar_load.setValue(100)
+        self.pbar_load.setStyleSheet(
+            f"QProgressBar {{ background-color: {BORDER}; border: none; border-radius: 4px; }} "
+            f"QProgressBar::chunk {{ background-color: {GREEN}; border-radius: 4px; }}"
         )
-        layout.addWidget(self.lbl_explorer_rule_banner)
+        s_layout.addWidget(self.pbar_load, stretch=1)
 
-        splitter = QSplitter(Qt.Horizontal)
+        self.lbl_load_time = QLabel("Belum ada data dimuat.")
+        self.lbl_load_time.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 13px; font-weight: 500;")
+        s_layout.addWidget(self.lbl_load_time)
+        layout.addWidget(status_card)
 
-        grp_left = QGroupBox("Daftar Case Hasil Filter")
-        ll = QVBoxLayout(grp_left)
-        self.model_explorer_cases = DataFrameTableModel()
-
-        self.table_explorer_cases = QTableView()
-        self.table_explorer_cases.setModel(self.model_explorer_cases)
-        self._configure_table(self.table_explorer_cases, stretch_last=True, interactive_columns=True)
-        self.table_explorer_cases.setSortingEnabled(True)
-        self.table_explorer_cases.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
-        self.table_explorer_cases.clicked.connect(self._on_explorer_case_clicked)
-        ll.addWidget(self.table_explorer_cases)
-        splitter.addWidget(grp_left)
-
-        grp_right = QGroupBox("Jejak Trace Lengkap (Urutan Event, Timestamp, Aktivitas, Lifecycle, Resource, && OfferID)")
-        lr = QVBoxLayout(grp_right)
-        self.lbl_explorer_case_meta = QLabel("Pilih sebuah case di sebelah kiri untuk melihat seluruh urutan event-nya.")
-        self.lbl_explorer_case_meta.setWordWrap(True)
-        self.lbl_explorer_case_meta.setStyleSheet(
-            "background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 5px; color: #1e3a8a; font-weight: 600; padding: 6px 10px;"
+        # Error notification box (hidden by default)
+        self.box_error = QFrame()
+        self.box_error.setStyleSheet(
+            f"background-color: {RED_BG}; border: 1px solid {RED_BORDER}; "
+            f"border-radius: 10px; padding: 14px;"
         )
-        lr.addWidget(self.lbl_explorer_case_meta)
+        err_l = QVBoxLayout(self.box_error)
+        err_l.setSpacing(4)
+        self.lbl_err_title = QLabel("Impor atau Validasi XES Gagal")
+        self.lbl_err_title.setStyleSheet(f"background: transparent; border: none; color: {RED}; font-weight: 700; font-size: 14px;")
+        err_l.addWidget(self.lbl_err_title)
+        self.lbl_err_msg = QLabel("Pesan kesalahan akan tampil di sini.")
+        self.lbl_err_msg.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 13px;")
+        err_l.addWidget(self.lbl_err_msg)
+        self.box_error.setVisible(False)
+        layout.addWidget(self.box_error)
 
-        self.model_explorer_events = DataFrameTableModel()
-        self.table_explorer_events = QTableView()
-        self.table_explorer_events.setModel(self.model_explorer_events)
-        self._configure_table(self.table_explorer_events, stretch_last=True)
-        lr.addWidget(self.table_explorer_events)
-        splitter.addWidget(grp_right)
-        splitter.setSizes([450, 870])
+        # Center: 5 Kartu Angka Besar (termasuk Resource unik)
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(14)
 
-        layout.addWidget(splitter, stretch=1)
-        self.tabs.addTab(tab, "6. Case Explorer && Bukti (F07)")
+        self.card_cases = KartuAngka(value="—", label="Case", height=96)
+        self.card_events = KartuAngka(value="—", label="Event", height=96)
+        self.card_acts = KartuAngka(value="—", label="Aktivitas", height=96)
+        self.card_resources = KartuAngka(value="—", label="Resource unik", height=96)
+        self.card_dur = KartuAngka(value="—", label="Rata-rata durasi", height=96)
+
+        cards_row.addWidget(self.card_cases)
+        cards_row.addWidget(self.card_events)
+        cards_row.addWidget(self.card_acts)
+        cards_row.addWidget(self.card_resources)
+        cards_row.addWidget(self.card_dur)
+        layout.addLayout(cards_row)
+
+        # Attribute validation row: Deretan ChipStatus
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(10)
+        self.chip_case_id = ChipStatus("Case ID", is_required=True)
+        self.chip_concept_name = ChipStatus("concept:name", is_required=True)
+        self.chip_timestamp = ChipStatus("timestamp", is_required=True)
+        self.chip_lifecycle = ChipStatus("lifecycle", is_required=False)
+        self.chip_resource = ChipStatus("resource", is_required=False)
+
+        chips_row.addWidget(self.chip_case_id)
+        chips_row.addWidget(self.chip_concept_name)
+        chips_row.addWidget(self.chip_timestamp)
+        chips_row.addWidget(self.chip_lifecycle)
+        chips_row.addWidget(self.chip_resource)
+        chips_row.addStretch()
+        layout.addLayout(chips_row)
+
+        # Horizontal 1 px divider separating top summary from bottom details
+        h_div = QFrame()
+        h_div.setFixedHeight(1)
+        h_div.setStyleSheet(f"background-color: {BORDER}; border: none;")
+        layout.addWidget(h_div)
+
+        # Bottom: Two borderless sections separated by 24px space and 1px vertical line
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(24)
+
+        # Left Section: Aktivitas terbanyak (tanpa bingkai kartu)
+        card_left = QWidget()
+        cl_layout = QVBoxLayout(card_left)
+        cl_layout.setContentsMargins(0, 8, 0, 0)
+        cl_layout.setSpacing(10)
+
+        cl_title = QLabel("Aktivitas terbanyak")
+        cl_title.setStyleSheet(f"background: transparent; border: none; font-size: 15px; font-weight: 700; color: {TEXT_PRIMARY};")
+        cl_layout.addWidget(cl_title)
+
+        self.box_act_bars = QVBoxLayout()
+        self.box_act_bars.setSpacing(6)
+        cl_layout.addLayout(self.box_act_bars)
+
+        self.btn_see_all_acts = QPushButton("Lihat semua aktivitas")
+        self.btn_see_all_acts.setStyleSheet(
+            f"background: transparent; border: none; color: {BLUE_LINK}; "
+            f"font-size: 13px; font-weight: 600; text-align: left; padding: 0;"
+        )
+        self.btn_see_all_acts.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_see_all_acts.clicked.connect(self._show_all_activities_dialog)
+        cl_layout.addWidget(self.btn_see_all_acts)
+
+        lc_title = QLabel("Distribusi lifecycle")
+        lc_title.setStyleSheet(f"background: transparent; border: none; font-size: 15px; font-weight: 700; color: {TEXT_PRIMARY}; margin-top: 8px;")
+        cl_layout.addWidget(lc_title)
+
+        self.box_lc_bars = QVBoxLayout()
+        self.box_lc_bars.setSpacing(5)
+        cl_layout.addLayout(self.box_lc_bars)
+        cl_layout.addStretch()
+
+        bottom_row.addWidget(card_left, stretch=6)
+
+        v_div = QFrame()
+        v_div.setFixedWidth(1)
+        v_div.setStyleSheet(f"background-color: {BORDER}; border: none;")
+        bottom_row.addWidget(v_div)
+
+        # Right Section: Durasi case (tanpa bingkai kartu)
+        card_right = QWidget()
+        cr_layout = QVBoxLayout(card_right)
+        cr_layout.setContentsMargins(0, 8, 0, 0)
+        cr_layout.setSpacing(10)
+
+        cr_top = QHBoxLayout()
+        cr_title = QLabel("Durasi case")
+        cr_title.setStyleSheet(f"background: transparent; border: none; font-size: 15px; font-weight: 700; color: {TEXT_PRIMARY};")
+        cr_top.addWidget(cr_title)
+        cr_top.addStretch()
+
+        # Segmented unit toggle: [Hari] [Jam] [Detik]
+        self.btn_unit_day = QPushButton("Hari")
+        self.btn_unit_hour = QPushButton("Jam")
+        self.btn_unit_sec = QPushButton("Detik")
+        for b in (self.btn_unit_day, self.btn_unit_hour, self.btn_unit_sec):
+            b.setFixedHeight(26)
+            b.setCursor(QCursor(Qt.PointingHandCursor))
+
+        self.btn_unit_day.clicked.connect(lambda: self._set_f02_unit("hari"))
+        self.btn_unit_hour.clicked.connect(lambda: self._set_f02_unit("jam"))
+        self.btn_unit_sec.clicked.connect(lambda: self._set_f02_unit("detik"))
+        self._update_unit_buttons()
+
+        cr_top.addWidget(self.btn_unit_day)
+        cr_top.addWidget(self.btn_unit_hour)
+        cr_top.addWidget(self.btn_unit_sec)
+        cr_layout.addLayout(cr_top)
+
+        # Tiga baris label-nilai terpisah untuk Min, Median, Maks + Std dev & Rentang waktu
+        dur_grid = QGridLayout()
+        dur_grid.setContentsMargins(0, 4, 0, 4)
+        dur_grid.setHorizontalSpacing(16)
+        dur_grid.setVerticalSpacing(6)
+
+        self.lbl_dur_min = QLabel("—")
+        self.lbl_dur_med = QLabel("—")
+        self.lbl_dur_max = QLabel("—")
+        self.lbl_std_dev = QLabel("—")
+        self.lbl_time_range = QLabel("—")
+
+        dur_rows = [
+            ("Minimum", self.lbl_dur_min),
+            ("Median", self.lbl_dur_med),
+            ("Maksimum", self.lbl_dur_max),
+            ("Simpangan baku", self.lbl_std_dev),
+            ("Rentang waktu", self.lbl_time_range),
+        ]
+        for row_idx, (k_txt, val_lbl) in enumerate(dur_rows):
+            k_lbl = QLabel(k_txt)
+            k_lbl.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 13px;")
+            val_lbl.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 600;")
+            dur_grid.addWidget(k_lbl, row_idx, 0)
+            dur_grid.addWidget(val_lbl, row_idx, 1)
+        dur_grid.setColumnStretch(1, 1)
+        cr_layout.addLayout(dur_grid)
+
+        # Precision selector
+        prec_row = QHBoxLayout()
+        prec_row.setSpacing(8)
+        lbl_prec = QLabel("Ketelitian:")
+        lbl_prec.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 13px;")
+        prec_row.addWidget(lbl_prec)
+
+        self.cmb_prec = QComboBox()
+        self.cmb_prec.addItems(["2 desimal", "4 desimal"])
+        self.cmb_prec.currentIndexChanged.connect(self._on_precision_changed)
+        prec_row.addWidget(self.cmb_prec)
+        prec_row.addStretch()
+        cr_layout.addLayout(prec_row)
+
+        # Histogram durasi case + batas 45 hari (Example 11.10 / Bagian 12 PDF)
+        hist_title = QLabel("Sebaran durasi case (batas 45 hari)")
+        hist_title.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 600; margin-top: 4px;")
+        cr_layout.addWidget(hist_title)
+
+        self.hist_durasi = HistogramDurasiWidget()
+        cr_layout.addWidget(self.hist_durasi)
+
+        self.lbl_fast_slow_summary = QLabel("Fast (< 45 hari): —, Slow (>= 45 hari): —")
+        self.lbl_fast_slow_summary.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 12px;")
+        cr_layout.addWidget(self.lbl_fast_slow_summary)
+
+        cr_layout.addStretch()
+
+        links_row = QHBoxLayout()
+        self.btn_see_cases = QPushButton("Daftar case dan durasi")
+        self.btn_see_cases.setStyleSheet(
+            f"background: transparent; border: none; color: {BLUE_LINK}; "
+            f"font-size: 13px; font-weight: 600; text-align: left; padding: 0;"
+        )
+        self.btn_see_cases.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_see_cases.clicked.connect(self._show_case_duration_dialog)
+        links_row.addWidget(self.btn_see_cases)
+
+        links_row.addStretch()
+
+        self.btn_fast_slow = QPushButton("Rincian Fast vs Slow")
+        self.btn_fast_slow.setStyleSheet(
+            f"background: transparent; border: none; color: {TEXT_MUTED}; "
+            f"font-size: 12px; font-weight: 500; text-align: right; padding: 0;"
+        )
+        self.btn_fast_slow.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_fast_slow.clicked.connect(self._show_fast_slow_dialog)
+        links_row.addWidget(self.btn_fast_slow)
+        cr_layout.addLayout(links_row)
+
+        bottom_row.addWidget(card_right, stretch=4)
+        layout.addLayout(bottom_row, stretch=1)
+
+        return widget
+
+    def _set_f02_unit(self, unit: str) -> None:
+        self.f02_unit = unit
+        self._update_unit_buttons()
+        if self.bundle:
+            self._update_f02_durations(self.bundle.overview)
+
+    def _update_unit_buttons(self) -> None:
+        for u, b in (("hari", self.btn_unit_day), ("jam", self.btn_unit_hour), ("detik", self.btn_unit_sec)):
+            if self.f02_unit == u:
+                b.setStyleSheet(
+                    f"background-color: {NAVY}; color: #FFFFFF; font-weight: 700; "
+                    f"border: 1px solid {NAVY}; border-radius: 6px; padding: 2px 10px;"
+                )
+            else:
+                b.setStyleSheet(
+                    f"background-color: {BG_SURFACE_MUTED}; color: {TEXT_MUTED}; font-weight: 500; "
+                    f"border: 1px solid {BORDER}; border-radius: 6px; padding: 2px 10px;"
+                )
+
+    def _on_precision_changed(self, idx: int) -> None:
+        self.f02_precision = 4 if idx == 1 else 2
+        if self.bundle:
+            self._refresh_all_numbers_precision()
 
     # ------------------------------------------------------------------
-    # TAB 7: F07 — Ringkasan Jawaban & Ekspor CSV / HTML
+    # TAB 2: EXERCISE 11.7 (A–E)
     # ------------------------------------------------------------------
-    def _build_tab_f07_export(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+    def _create_tab_117(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
 
+        # 5 Answer Cards in 1 row (11.7 A - E)
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(12)
+        self.cards_117: Dict[str, KartuAngka] = {}
+        defs_117 = [
+            ("11.7 A", "Total case"),
+            ("11.7 B", "Rata-rata durasi"),
+            ("11.7 C", "Berhasil"),
+            ("11.7 D", "Tidak berhasil"),
+            ("11.7 E", "Dibatalkan"),
+        ]
+        for code, label in defs_117:
+            c = KartuAngka(code=code, value="—", label=label, height=100)
+            c.clicked.connect(lambda q=code: self._select_117_sub(q))
+            self.cards_117[code] = c
+            cards_row.addWidget(c)
+        layout.addLayout(cards_row)
+
+        # Overlap C/D & Endpoint E note
+        self.lbl_117_notes = QLabel("Klik salah satu kartu di atas untuk melihat rincian dan bukti case.")
+        self.lbl_117_notes.setWordWrap(True)
+        self.lbl_117_notes.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 13px;")
+        layout.addWidget(self.lbl_117_notes)
+
+        # Selected sub-question header + rule + mean duration badge
+        rule_row = QHBoxLayout()
+        rule_row.setSpacing(10)
+        self.lbl_117_rule = QLabel("Aturan filter 11.7 A:")
+        self.lbl_117_rule.setStyleSheet(f"background: transparent; border: none; font-size: 14px; font-weight: 600; color: {TEXT_PRIMARY};")
+        rule_row.addWidget(self.lbl_117_rule)
+        rule_row.addStretch()
+
+        self.lbl_117_dur_badge = QLabel("")
+        self.lbl_117_dur_badge.setStyleSheet(
+            f"background-color: {BLUE_BG}; color: {BLUE_LINK}; "
+            f"border: 1px solid {BLUE_BORDER}; border-radius: 6px; padding: 4px 10px; font-size: 13px; font-weight: 600;"
+        )
+        self.lbl_117_dur_badge.setVisible(False)
+        rule_row.addWidget(self.lbl_117_dur_badge)
+        layout.addLayout(rule_row)
+
+        self.table_117 = QTableView()
+        self.table_117.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.table_117.horizontalHeader().setStretchLastSection(True)
+        self.table_117.verticalHeader().setVisible(False)
+        self.table_117.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_117.clicked.connect(lambda idx: self._on_tab_table_clicked(idx, "_raw_ids_117", self.strip_117, self.selected_117_sub))
+        layout.addWidget(self.table_117, stretch=1)
+
+        self.strip_117 = StripAlur()
+        layout.addWidget(self.strip_117)
+
+        act_row = QHBoxLayout()
+        act_row.setSpacing(10)
+        btn_exp = QPushButton("Buka di Case Explorer")
+        btn_exp.clicked.connect(lambda: self._open_table_selection_in_explorer(self.table_117, "_raw_ids_117"))
+        act_row.addWidget(btn_exp)
+
+        btn_csv = QPushButton("Ekspor CSV soal ini")
+        btn_csv.clicked.connect(lambda: self._export_table_csv(self.table_117, self.selected_117_sub))
+        act_row.addWidget(btn_csv)
+
+        btn_rerun = QPushButton("Jalankan ulang")
+        btn_rerun.clicked.connect(self.on_rerun_all)
+        act_row.addWidget(btn_rerun)
+        act_row.addStretch()
+        layout.addLayout(act_row)
+
+        self._update_117_card_selection()
+        return widget
+
+    def _select_117_sub(self, code: str) -> None:
+        self.selected_117_sub = code
+        self._update_117_card_selection()
+        if self.bundle:
+            self._render_tab_117()
+
+    def _update_117_card_selection(self) -> None:
+        for c, card in self.cards_117.items():
+            card.set_selected(c == self.selected_117_sub)
+
+    def _render_tab_117(self) -> None:
+        b = self.bundle
+        if not b:
+            return
+        p = self.f02_precision
+        ov = b.overview
+
+        # Update 5 cards
+        self.cards_117["11.7 A"].set_content(fmt_int(b.ex117.sub_a.case_count))
+        self.cards_117["11.7 B"].set_content(f"{fmt_num(b.ex117.sub_b.mean_duration_days, p)} hari")
+        self.cards_117["11.7 C"].set_content(
+            fmt_int(b.ex117.sub_c.case_count),
+            f"{fmt_num(b.ex117.sub_c.case_percentage, p)}%",
+            label=f"Berhasil (rata-rata {fmt_num(b.ex117.sub_c.mean_duration_days, p)} hari)",
+        )
+        self.cards_117["11.7 D"].set_content(
+            fmt_int(b.ex117.sub_d.case_count),
+            f"{fmt_num(b.ex117.sub_d.case_percentage, p)}%",
+            label=f"Tidak berhasil (rata-rata {fmt_num(b.ex117.sub_d.mean_duration_days, p)} hari)",
+        )
+        self.cards_117["11.7 E"].set_content(
+            fmt_int(b.ex117.sub_e.case_count),
+            f"{fmt_num(b.ex117.sub_e.case_percentage, p)}%",
+            label=f"Dibatalkan (rata-rata {fmt_num(b.ex117.sub_e.mean_duration_days, p)} hari)",
+        )
+
+        # Overlap C & D + 11.7 E note (Section 3d)
+        ov_ids = b.ex117.overlap_c_and_d_case_ids
+        if b.ex117.overlap_c_and_d_count > 0:
+            ex_txt = ", ".join(format_case_id_middle(x, 40) for x in ov_ids[:2])
+            if len(ov_ids) > 2:
+                ex_txt += ", ..."
+            cd_note = f"{fmt_int(b.ex117.overlap_c_and_d_count)} case masuk C dan D ({ex_txt})"
+        else:
+            cd_note = "0 case masuk C dan D"
+
+        e_note = (
+            f"11.7 E: {fmt_int(b.ex117.sub_e.case_count)} dari {fmt_int(b.ex117.contains_cancelled_anywhere_count)} "
+            f"case yang memuat O_Cancelled"
+        )
+        self.lbl_117_notes.setText(f"{cd_note}.   {e_note}.")
+
+        # Render selected sub-question table
+        code = self.selected_117_sub
+        self.lbl_117_dur_badge.setVisible(False)
+        headers: List[str] = ["Case", "Durasi", "Status"]
+        rows: List[List[Any]] = []
+        raw_ids: List[str] = []
+        tooltips: Dict[Tuple[int, int], str] = {}
+
+        if code == "11.7 A":
+            self.lbl_117_rule.setText("11.7 A: Hitung seluruh unique case/trace dari keseluruhan event log aktif")
+            headers = ["Case", "Jml Event", "Durasi"]
+            top_cases = ov.case_table.sort_values(by="duration_days", ascending=False).head(200)
+            for idx_r, r in enumerate(top_cases.itertuples(index=False)):
+                cid = str(r.case_id)
+                raw_ids.append(cid)
+                tooltips[(idx_r, 0)] = cid
+                rows.append([format_case_id_middle(cid), f"{fmt_int(r.event_count)} event", f"{fmt_num(r.duration_days, p)} hari"])
+        elif code == "11.7 B":
+            dur = b.ex117.sub_b.mean_duration_days
+            self.lbl_117_rule.setText("11.7 B: Rata-rata cycle time seluruh case (event terakhir - event pertama)")
+            self.lbl_117_dur_badge.setText(f"Rata-rata {fmt_num(dur, p)} hari ({fmt_num(b.ex117.sub_b.mean_duration_hours, p)} jam)")
+            self.lbl_117_dur_badge.setVisible(True)
+            headers = ["Case", "Durasi", "Event Terakhir"]
+            for idx_r, r in enumerate(ov.case_table.head(200).itertuples(index=False)):
+                cid = str(r.case_id)
+                raw_ids.append(cid)
+                tooltips[(idx_r, 0)] = cid
+                rows.append([format_case_id_middle(cid), f"{fmt_num(r.duration_days, p)} hari", str(r.last_activity)])
+        elif code == "11.7 C":
+            sub = b.ex117.sub_c
+            self.lbl_117_rule.setText("11.7 C: Case memuat setidaknya satu event O_Accepted (dihitung 1x per case)")
+            self.lbl_117_dur_badge.setText(f"Rata-rata {fmt_num(sub.mean_duration_days, p)} hari")
+            self.lbl_117_dur_badge.setVisible(True)
+            headers = ["Case", "Durasi", "Berakhir di"]
+            for idx_r, r in enumerate(sub.case_df.head(500).itertuples(index=False)):
+                cid = str(r.case_id)
+                raw_ids.append(cid)
+                tooltips[(idx_r, 0)] = cid
+                rows.append([format_case_id_middle(cid), f"{fmt_num(r.duration_days, p)} hari", str(r.last_activity)])
+        elif code == "11.7 D":
+            sub = b.ex117.sub_d
+            self.lbl_117_rule.setText("11.7 D: Case memuat setidaknya satu event O_Refused (tidak saling eksklusif)")
+            self.lbl_117_dur_badge.setText(f"Rata-rata {fmt_num(sub.mean_duration_days, p)} hari")
+            self.lbl_117_dur_badge.setVisible(True)
+            headers = ["Case", "Durasi", "Berakhir di"]
+            for idx_r, r in enumerate(sub.case_df.head(500).itertuples(index=False)):
+                cid = str(r.case_id)
+                raw_ids.append(cid)
+                tooltips[(idx_r, 0)] = cid
+                rows.append([format_case_id_middle(cid), f"{fmt_num(r.duration_days, p)} hari", str(r.last_activity)])
+        elif code == "11.7 E":
+            sub = b.ex117.sub_e
+            self.lbl_117_rule.setText("11.7 E: Event TERAKHIR pada trace adalah O_Cancelled (Endpoint filter)")
+            self.lbl_117_dur_badge.setText(f"Rata-rata {fmt_num(sub.mean_duration_days, p)} hari")
+            self.lbl_117_dur_badge.setVisible(True)
+            headers = ["Case", "Durasi", "Berakhir di"]
+            for idx_r, r in enumerate(sub.case_df.head(500).itertuples(index=False)):
+                cid = str(r.case_id)
+                raw_ids.append(cid)
+                tooltips[(idx_r, 0)] = cid
+                rows.append([format_case_id_middle(cid), f"{fmt_num(r.duration_days, p)} hari", "O_Cancelled"])
+
+        self._raw_ids_117 = raw_ids
+        model = Simple3ColTableModel(headers, rows, self, tooltips=tooltips)
+        self.table_117.setModel(model)
+        self.table_117.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table_117.horizontalHeader().setStretchLastSection(True)
+
+        if rows:
+            self.table_117.selectRow(0)
+            self._update_evidence_strip(self.strip_117, raw_ids[0], code)
+        else:
+            self.strip_117.set_trace("", [], [])
+
+    # ------------------------------------------------------------------
+    # TAB 3: EXERCISE 11.15 & 11.18
+    # ------------------------------------------------------------------
+    def _create_tab_1115_1118(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        # Top row: 2 Answer Cards on left + Corong 11.15 -> 11.18 on right
         top_row = QHBoxLayout()
-        btn_export_dir = QPushButton("Ekspor Semua Hasil Analisis ke Folder (10 CSV + Laporan HTML)...")
-        btn_export_dir.setObjectName("SuccessBtn")
-        btn_export_dir.clicked.connect(self.on_export_all)
+        top_row.setSpacing(24)
 
-        btn_export_single_csv = QPushButton("Simpan Tabel Ringkasan Jawaban ke File CSV...")
-        btn_export_single_csv.clicked.connect(self.on_export_summary_csv)
+        cards_col = QHBoxLayout()
+        cards_col.setSpacing(12)
+        self.card_1115 = KartuAngka(code="11.15", value="—", label="Fraud 2x", height=104)
+        self.card_1118 = KartuAngka(code="11.18", value="—", label="Resource sama", height=104)
+        self.card_1115.clicked.connect(lambda: self._select_1518_sub("11.15"))
+        self.card_1118.clicked.connect(lambda: self._select_1518_sub("11.18"))
+        cards_col.addWidget(self.card_1115)
+        cards_col.addWidget(self.card_1118)
+        top_row.addLayout(cards_col, stretch=5)
 
-        lbl_export_hint = QLabel("Seluruh jawaban utama, persentase, denominator, dan rata-rata cycle time ditampilkan utuh di bawah ini.")
-        lbl_export_hint.setStyleSheet("color: #475569; font-weight: 600;")
-
-        top_row.addWidget(btn_export_dir)
-        top_row.addWidget(btn_export_single_csv)
-        top_row.addSpacing(12)
-        top_row.addWidget(lbl_export_hint)
-        top_row.addStretch(1)
+        self.corong_1115 = Corong1115Widget()
+        top_row.addWidget(self.corong_1115, stretch=5)
         layout.addLayout(top_row)
 
-        grp_sum = QGroupBox("Ringkasan Kedelapan Butir Jawaban Wajib (Exercise 11.7 A–E, 11.15, 11.18, && 11.22)")
-        ls = QVBoxLayout(grp_sum)
-        self.model_export_summary = DataFrameTableModel()
-        self.table_export_summary = QTableView()
-        self.table_export_summary.setModel(self.model_export_summary)
-        self._configure_table(self.table_export_summary, stretch_last=True, word_wrap=True, row_height=54)
-        ls.addWidget(self.table_export_summary)
-        layout.addWidget(grp_sum, stretch=1)
+        h_div = QFrame()
+        h_div.setFixedHeight(1)
+        h_div.setStyleSheet(f"background-color: {BORDER}; border: none;")
+        layout.addWidget(h_div)
 
-        self.tabs.addTab(tab, "7. Ringkasan && Ekspor (F07)")
+        # Rule + Toggle "Tampilkan case yang tidak lolos"
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(12)
+        self.lbl_1518_rule = QLabel("11.15: W_Assess Potential Fraud selesai (complete) minimal 2 kali")
+        self.lbl_1518_rule.setStyleSheet(f"background: transparent; border: none; font-size: 14px; font-weight: 600; color: {TEXT_PRIMARY};")
+        ctrl_row.addWidget(self.lbl_1518_rule)
+        ctrl_row.addStretch()
 
-    def _resize_summary_table_columns(self) -> None:
-        """Configures balanced column widths and row heights for the Tab 7 summary table so no column is cut off."""
-        df = self.model_export_summary.get_dataframe()
-        if df.empty:
+        self.chk_show_excluded_1518 = QCheckBox("Tampilkan case yang tidak lolos")
+        self.chk_show_excluded_1518.setStyleSheet(f"font-size: 13px; color: {TEXT_PRIMARY}; font-weight: 500;")
+        self.chk_show_excluded_1518.stateChanged.connect(lambda _: self._render_tab_1518())
+        ctrl_row.addWidget(self.chk_show_excluded_1518)
+        layout.addLayout(ctrl_row)
+
+        self.lbl_1518_notice = QLabel("")
+        self.lbl_1518_notice.setStyleSheet(f"background: transparent; border: none; font-size: 13px; color: {TEXT_MUTED};")
+        self.lbl_1518_notice.setVisible(False)
+        layout.addWidget(self.lbl_1518_notice)
+
+        self.table_1518 = QTableView()
+        self.table_1518.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.table_1518.horizontalHeader().setStretchLastSection(True)
+        self.table_1518.verticalHeader().setVisible(False)
+        self.table_1518.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_1518.clicked.connect(lambda idx: self._on_tab_table_clicked(idx, "_raw_ids_1518", self.strip_1518, self.selected_1518_sub))
+        layout.addWidget(self.table_1518, stretch=1)
+
+        self.strip_1518 = StripAlur()
+        layout.addWidget(self.strip_1518)
+
+        act_row = QHBoxLayout()
+        act_row.setSpacing(10)
+        btn_exp = QPushButton("Buka di Case Explorer")
+        btn_exp.clicked.connect(lambda: self._open_table_selection_in_explorer(self.table_1518, "_raw_ids_1518"))
+        act_row.addWidget(btn_exp)
+
+        btn_csv = QPushButton("Ekspor CSV soal ini")
+        btn_csv.clicked.connect(lambda: self._export_table_csv(self.table_1518, self.selected_1518_sub))
+        act_row.addWidget(btn_csv)
+
+        btn_rerun = QPushButton("Jalankan ulang")
+        btn_rerun.clicked.connect(self.on_rerun_all)
+        act_row.addWidget(btn_rerun)
+        act_row.addStretch()
+        layout.addLayout(act_row)
+
+        self._update_1518_card_selection()
+        return widget
+
+    def _select_1518_sub(self, code: str) -> None:
+        self.selected_1518_sub = code
+        self._update_1518_card_selection()
+        if self.bundle:
+            self._render_tab_1518()
+
+    def _update_1518_card_selection(self) -> None:
+        self.card_1115.set_selected(self.selected_1518_sub == "11.15")
+        self.card_1118.set_selected(self.selected_1518_sub == "11.18")
+
+    def _render_tab_1518(self) -> None:
+        b = self.bundle
+        if not b:
             return
-        hh = self.table_export_summary.horizontalHeader()
-        hh.setSectionResizeMode(QHeaderView.Interactive)
+        p = self.f02_precision
+        ov = b.overview
+        r15 = b.ex1115
+        r18 = b.ex1118
+
+        self.card_1115.set_content(fmt_int(r15.matching_case_count), f"{fmt_num(r15.matching_percentage, p)}%")
+        self.card_1118.set_content(fmt_int(r18.matching_case_count), f"{fmt_num(r18.matching_percentage, p)}%")
+        self.corong_1115.set_values(ov.total_cases, r15.matching_case_count, r18.matching_case_count, dec=p)
+
+        self.lbl_1518_notice.setVisible(False)
+        rows: List[List[Any]] = []
+        raw_ids: List[str] = []
+        tooltips: Dict[Tuple[int, int], str] = {}
+        code = self.selected_1518_sub
+
+        if code == "11.15":
+            self.lbl_1518_rule.setText("11.15: W_Assess Potential Fraud selesai (complete) minimal 2 kali")
+            if self.chk_show_excluded_1518.isChecked():
+                self.lbl_1518_notice.setText(
+                    f"Menampilkan {fmt_int(r15.excluded_by_lifecycle_count)} case yang memiliki >= 2 event W_Assess "
+                    f"di seluruh lifecycle tetapi < 2 berstatus complete (tereliminasi filter complete-only)."
+                )
+                self.lbl_1518_notice.setVisible(True)
+                headers = ["Case (Tidak Lolos)", "Complete / Total", "Alasan Ditolak"]
+                df_all_w = b.context.df[
+                    b.context.df["concept:name"].astype(str).str.strip().str.lower() == "w_assess potential fraud"
+                ]
+                has_lc = "lifecycle:transition" in df_all_w.columns
+                for idx_r, cid in enumerate(r15.excluded_case_ids[:200]):
+                    sub_w = df_all_w[df_all_w["case:concept:name"].astype(str) == cid]
+                    tot_w = len(sub_w)
+                    comp_w = int((sub_w["lifecycle:transition"].astype(str).str.strip().str.lower() == "complete").sum()) if has_lc else tot_w
+                    raw_ids.append(cid)
+                    tooltips[(idx_r, 0)] = cid
+                    rows.append([format_case_id_middle(cid), f"{comp_w}x / {tot_w}x", "Ditolak: < 2 complete"])
+            else:
+                headers = ["Case", "Jumlah complete", "Resource sama"]
+                same_res_cids = set(r18.case_resource_summary_df["case_id"].astype(str)) if not r18.case_resource_summary_df.empty else set()
+                for idx_r, r in enumerate(r15.case_summary_df.itertuples(index=False)):
+                    cid = str(r.case_id)
+                    raw_ids.append(cid)
+                    tooltips[(idx_r, 0)] = cid
+                    res_str = str(getattr(r, "resources_involved", ""))
+                    if cid in same_res_cids:
+                        res_status = "Ya"
+                    elif not res_str or res_str.strip() in ("", ",", "-"):
+                        res_status = "Resource kosong"
+                    else:
+                        res_status = "Tidak"
+                    rows.append([format_case_id_middle(cid), f"{r.complete_occurrences}x", res_status])
+        else:
+            self.lbl_1518_rule.setText("11.18: W_Assess Potential Fraud complete >= 2x oleh org:resource yang SAMA")
+            if self.chk_show_excluded_1518.isChecked():
+                excl = r18.cases_from_1115_excluded_diff_resource
+                self.lbl_1518_notice.setText(
+                    f"Menampilkan {fmt_int(len(excl))} case yang lolos 11.15 tetapi ditolak 11.18 karena resource berbeda atau kosong."
+                )
+                self.lbl_1518_notice.setVisible(True)
+                headers = ["Case (Tidak Lolos)", "Resource Terlibat", "Alasan Ditolak"]
+                df15 = r15.case_summary_df
+                res_map = dict(zip(df15["case_id"].astype(str), df15["resources_involved"].astype(str))) if not df15.empty else {}
+                for idx_r, cid in enumerate(excl[:200]):
+                    raw_ids.append(cid)
+                    tooltips[(idx_r, 0)] = cid
+                    r_inv = res_map.get(cid, "—")
+                    reason = "Ditolak: Resource kosong" if r_inv.strip() in ("", "-", "nan") else "Ditolak: Resource berbeda"
+                    rows.append([format_case_id_middle(cid), r_inv, reason])
+            else:
+                headers = ["Case", "Resource", "Jumlah selesai"]
+                for idx_r, r in enumerate(r18.case_resource_summary_df.itertuples(index=False)):
+                    cid = str(r.case_id)
+                    raw_ids.append(cid)
+                    tooltips[(idx_r, 0)] = cid
+                    rows.append([format_case_id_middle(cid), str(getattr(r, "resource_id", "—")), f"{r.same_resource_completions}x"])
+
+        self._raw_ids_1518 = raw_ids
+        model = Simple3ColTableModel(headers, rows, self, tooltips=tooltips)
+        self.table_1518.setModel(model)
+        self.table_1518.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table_1518.horizontalHeader().setStretchLastSection(True)
+
+        if rows:
+            self.table_1518.selectRow(0)
+            self._update_evidence_strip(self.strip_1518, raw_ids[0], code)
+        else:
+            self.strip_1518.set_trace("", [], [])
+
+    # ------------------------------------------------------------------
+    # TAB 4: EXERCISE 11.22
+    # ------------------------------------------------------------------
+    def _create_tab_1122(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        ans_row = QHBoxLayout()
+        ans_row.setSpacing(12)
+        ans_row.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        self.lbl_22_ans = QLabel("—")
+        self.lbl_22_ans.setStyleSheet(f"background: transparent; border: none; font-size: 38px; font-weight: 700; color: {TEXT_PRIMARY};")
+        ans_row.addWidget(self.lbl_22_ans)
+
+        self.lbl_22_pct = QLabel("")
+        self.lbl_22_pct.setStyleSheet(f"background: transparent; border: none; font-size: 20px; font-weight: 500; color: {TEXT_MUTED};")
+        ans_row.addWidget(self.lbl_22_pct)
+
+        self.lbl_22_badge = QLabel("—")
+        self.lbl_22_badge.setStyleSheet(
+            f"background-color: {BG_SURFACE_MUTED}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 4px 10px; font-size: 13px; font-weight: 600;"
+        )
+        ans_row.addWidget(self.lbl_22_badge)
+        ans_row.addStretch()
+        layout.addLayout(ans_row)
+
+        self.lbl_22_rule = QLabel("Case memuat O_Cancelled lalu kemudian diikuti O_Accepted (posisi i < j, tidak harus bersebelahan)")
+        self.lbl_22_rule.setStyleSheet(f"background: transparent; border: none; font-size: 14px; font-weight: 600; color: {TEXT_PRIMARY};")
+        layout.addWidget(self.lbl_22_rule)
+
+        self.table_22 = QTableView()
+        self.table_22.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.table_22.horizontalHeader().setStretchLastSection(True)
+        self.table_22.verticalHeader().setVisible(False)
+        self.table_22.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_22.clicked.connect(lambda idx: self._on_tab_table_clicked(idx, "_raw_ids_1122", self.strip_22, "11.22"))
+        layout.addWidget(self.table_22, stretch=1)
+
+        self.strip_22 = StripAlur()
+        layout.addWidget(self.strip_22)
+
+        self.lbl_22_offer_extra = QLabel("Analisis tambahan (Level OfferID): —")
+        self.lbl_22_offer_extra.setWordWrap(True)
+        self.lbl_22_offer_extra.setStyleSheet(f"background: transparent; border: none; font-size: 13px; color: {TEXT_MUTED};")
+        layout.addWidget(self.lbl_22_offer_extra)
+
+        act_row = QHBoxLayout()
+        act_row.setSpacing(10)
+        btn_exp = QPushButton("Buka di Case Explorer")
+        btn_exp.clicked.connect(lambda: self._open_table_selection_in_explorer(self.table_22, "_raw_ids_1122"))
+        act_row.addWidget(btn_exp)
+
+        btn_csv = QPushButton("Ekspor CSV soal ini")
+        btn_csv.clicked.connect(lambda: self._export_table_csv(self.table_22, "11.22"))
+        act_row.addWidget(btn_csv)
+
+        btn_rerun = QPushButton("Jalankan ulang")
+        btn_rerun.clicked.connect(self.on_rerun_all)
+        act_row.addWidget(btn_rerun)
+        act_row.addStretch()
+        layout.addLayout(act_row)
+
+        return widget
+
+    def _render_tab_1122(self) -> None:
+        b = self.bundle
+        if not b:
+            return
+        p = self.f02_precision
+        total = b.overview.total_cases
+        r22 = b.ex1122
+
+        ans_txt = f"Ya, {fmt_int(r22.matching_case_count)} case" if r22.matching_case_count > 0 else "0 case"
+        self.lbl_22_ans.setText(ans_txt)
+        self.lbl_22_pct.setText(f"{fmt_num(r22.matching_percentage, p)}%")
+        self.lbl_22_badge.setText(f"{fmt_int(r22.matching_case_count)} dari {fmt_int(total)} case")
+
+        headers = ["Case", "Posisi O_Cancelled (i)", "Posisi O_Accepted (j)"]
+        rows: List[List[Any]] = []
+        raw_ids: List[str] = []
+        tooltips: Dict[Tuple[int, int], str] = {}
+        for idx_r, r in enumerate(r22.case_summary_df.head(500).itertuples(index=False)):
+            cid = str(r.case_id)
+            raw_ids.append(cid)
+            tooltips[(idx_r, 0)] = cid
+            rows.append([format_case_id_middle(cid), f"Posisi {r.cancelled_trace_pos} (i)", f"Posisi {r.accepted_trace_pos} (j)"])
+
+        self.lbl_22_offer_extra.setText(
+            f"Analisis tambahan (Level OfferID): {fmt_int(r22.same_offer_id_matching_count)} case memiliki OfferID identik "
+            f"antara penawaran yang dibatalkan dan penawaran yang diterima (Penjelasan 7.3 PDF)."
+        )
+
+        self._raw_ids_1122 = raw_ids
+        model = Simple3ColTableModel(headers, rows, self, tooltips=tooltips)
+        self.table_22.setModel(model)
+        self.table_22.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table_22.horizontalHeader().setStretchLastSection(True)
+
+        if rows:
+            self.table_22.selectRow(0)
+            self._update_evidence_strip(self.strip_22, raw_ids[0], "11.22")
+        else:
+            self.strip_22.set_trace("", [], [])
+
+    # ------------------------------------------------------------------
+    # SHARED EVIDENCE & ACTION HELPERS FOR EXERCISE TABS
+    # ------------------------------------------------------------------
+    def _on_tab_table_clicked(self, idx: QModelIndex, ids_attr: str, strip: StripAlur, code: str) -> None:
+        raw_ids = getattr(self, ids_attr, [])
+        if not idx.isValid() or not raw_ids:
+            return
+        r = idx.row()
+        if 0 <= r < len(raw_ids):
+            self._update_evidence_strip(strip, raw_ids[r], code)
+
+    def _update_evidence_strip(self, strip: StripAlur, case_id: str, code: str) -> None:
+        b = self.bundle
+        if not b or not case_id:
+            return
+        events_df = b.context.get_case_events(case_id)
+        if events_df.empty:
+            strip.set_trace(case_id, [], [])
+            return
+
+        ev_list = events_df.to_dict(orient="records")
+        hl_indices: List[int] = []
+
+        if code == "11.7 C":
+            hl_indices = [i for i, ev in enumerate(ev_list) if ev.get("concept:name") == "O_Accepted"]
+        elif code == "11.7 D":
+            hl_indices = [i for i, ev in enumerate(ev_list) if ev.get("concept:name") == "O_Refused"]
+        elif code == "11.7 E":
+            if ev_list and ev_list[-1].get("concept:name") == "O_Cancelled":
+                hl_indices = [len(ev_list) - 1]
+        elif code in ("11.15", "11.18"):
+            hl_indices = [
+                i for i, ev in enumerate(ev_list)
+                if ev.get("concept:name") == "W_Assess potential fraud" and ev.get("lifecycle:transition") == "complete"
+            ]
+        elif code == "11.22":
+            for i, ev in enumerate(ev_list):
+                if ev.get("concept:name") in ("O_Cancelled", "O_Accepted"):
+                    hl_indices.append(i)
+
+        strip.set_trace(
+            case_id,
+            ev_list,
+            hl_indices,
+            show_resource_and_date=(code in ("11.15", "11.18")),
+        )
+
+    def _open_table_selection_in_explorer(self, table_view: QTableView, ids_attr: str) -> None:
+        raw_ids = getattr(self, ids_attr, [])
+        if not raw_ids:
+            return
+        row = table_view.currentIndex().row()
+        if row < 0:
+            row = 0
+        self._select_case_in_explorer(raw_ids[row])
+
+    def _export_table_csv(self, table_view: QTableView, label: str) -> None:
+        if not self.bundle:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Ekspor CSV {label}", "", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            model = table_view.model()
+            if isinstance(model, Simple3ColTableModel):
+                df = pd.DataFrame(model._rows, columns=model._headers)
+                df.to_csv(path, index=False, encoding="utf-8-sig")
+                self.has_exported = True
+                self.drawer.update_states(has_data=True, has_analysis=True, exported=True)
+                self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
+                QMessageBox.information(self, "Ekspor Berhasil", f"Tabel soal {label} disimpan ke:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Ekspor Gagal", str(exc))
+
+    # ------------------------------------------------------------------
+    # TAB 4: CASE EXPLORER (F07)
+    # ------------------------------------------------------------------
+    def _create_tab_explorer(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(24)
+
+        # Left panel (width 430px so full BPIC17 Case IDs are readable without ellipsis)
+        left_box = QWidget()
+        left_box.setFixedWidth(430)
+        ll = QVBoxLayout(left_box)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(10)
+
+        self._exp_search_timer = QTimer(self)
+        self._exp_search_timer.setSingleShot(True)
+        self._exp_search_timer.setInterval(180)
+        self._exp_search_timer.timeout.connect(self._apply_explorer_filter)
+
+        self.exp_search = QLineEdit()
+        self.exp_search.setPlaceholderText("Cari Case ID...")
+        self.exp_search.textChanged.connect(lambda _: self._exp_search_timer.start())
+        ll.addWidget(self.exp_search)
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
+        self.cmb_exp_group = QComboBox()
+        self.cmb_exp_group.addItems([
+            "Semua case",
+            "11.7 C (Berhasil)",
+            "11.7 D (Tidak berhasil)",
+            "11.7 E (Dibatalkan)",
+            "11.15 (Fraud 2x)",
+            "11.18 (Resource sama)",
+            "11.22 (Cancelled lalu Accepted)",
+        ])
+        self.cmb_exp_group.currentIndexChanged.connect(self._on_explorer_group_changed)
+        filter_row.addWidget(self.cmb_exp_group, stretch=1)
+
+        btn_reset = QPushButton("Reset")
+        btn_reset.clicked.connect(self._on_explorer_reset)
+        filter_row.addWidget(btn_reset)
+        ll.addLayout(filter_row)
+
+        self.table_exp_cases = QTableView()
+        self.table_exp_cases.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.table_exp_cases.horizontalHeader().setStretchLastSection(True)
+        self.table_exp_cases.verticalHeader().setVisible(False)
+        self.table_exp_cases.clicked.connect(self._on_exp_case_clicked)
+        ll.addWidget(self.table_exp_cases, stretch=1)
+
+        layout.addWidget(left_box)
+
+        v_div = QFrame()
+        v_div.setFixedWidth(1)
+        v_div.setStyleSheet(f"background-color: {BORDER}; border: none;")
+        layout.addWidget(v_div)
+
+        # Right panel (tanpa bingkai kartu)
+        right_box = QWidget()
+        rl = QVBoxLayout(right_box)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(10)
+
+        # Summary line
+        self.lbl_exp_summary = QLabel("Pilih sebuah case untuk melihat alur event-nya.")
+        self.lbl_exp_summary.setStyleSheet(f"background: transparent; border: none; font-size: 15px; font-weight: 700; color: {TEXT_PRIMARY};")
+        rl.addWidget(self.lbl_exp_summary)
+
+        self.lbl_exp_flow = QLabel("—")
+        self.lbl_exp_flow.setStyleSheet(f"background: transparent; border: none; font-size: 13px; color: {TEXT_MUTED};")
+        rl.addWidget(self.lbl_exp_flow)
+
+        # Trace Events Table (Waktu, Aktivitas + lifecycle subtext, Resource)
+        self.table_exp_events = QTableView()
+        self.table_exp_events.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.table_exp_events.horizontalHeader().setStretchLastSection(True)
+        self.table_exp_events.verticalHeader().setVisible(False)
+        self.table_exp_events.setItemDelegateForColumn(1, ActivityLifecycleDelegate(self.table_exp_events))
+        rl.addWidget(self.table_exp_events, stretch=1)
+
+        # Checkbox: Tampilkan detail (Offer ID, Event ID)
+        self.chk_exp_detail = QCheckBox("Tampilkan detail (Offer ID, Event ID)")
+        self.chk_exp_detail.setStyleSheet(f"font-size: 13px; color: {TEXT_MUTED};")
+        self.chk_exp_detail.stateChanged.connect(self._on_exp_detail_toggled)
+        rl.addWidget(self.chk_exp_detail)
+
+        layout.addWidget(right_box, stretch=1)
+
+        return widget
+
+    def _on_explorer_group_changed(self) -> None:
+        if not self.bundle:
+            return
+        idx = self.cmb_exp_group.currentIndex()
+        b = self.bundle
+
+        if idx == 0:
+            df = b.overview.case_table
+        elif idx == 1:
+            df = b.ex117.sub_c.case_df
+        elif idx == 2:
+            df = b.ex117.sub_d.case_df
+        elif idx == 3:
+            df = b.ex117.sub_e.case_df
+        elif idx == 4:
+            df = b.ex1115.case_summary_df
+        elif idx == 5:
+            df = b.ex1118.case_resource_summary_df
+        else:
+            df = b.ex1122.case_summary_df
+
+        self._exp_current_df = df
+        self._populate_explorer_case_list(df)
+
+    def _apply_explorer_filter(self) -> None:
+        self._on_explorer_filter(self.exp_search.text())
+
+    def _on_explorer_filter(self, text: str) -> None:
+        if not hasattr(self, "_exp_current_df") or self._exp_current_df is None:
+            return
+        if not text.strip():
+            self._populate_explorer_case_list(self._exp_current_df)
+        else:
+            filtered = self._exp_current_df[
+                self._exp_current_df["case_id"].astype(str).str.contains(text.strip(), case=False, na=False)
+            ]
+            self._populate_explorer_case_list(filtered)
+
+    def _on_explorer_reset(self) -> None:
+        self.exp_search.clear()
+        self.cmb_exp_group.setCurrentIndex(0)
+        if self.bundle:
+            self._on_explorer_group_changed()
+
+    def _populate_explorer_case_list(self, df: pd.DataFrame) -> None:
+        headers = ["Case ID", "Event", "Lolos di"]
+        tags_map = getattr(self, "_case_category_tags", {})
+        cids = df["case_id"].astype(str).tolist() if not df.empty else []
+        if "event_count" in df.columns:
+            ecnts = df["event_count"].tolist()
+        elif "complete_occurrences" in df.columns:
+            ecnts = df["complete_occurrences"].tolist()
+        else:
+            ecnts = ["—"] * len(cids)
+
+        rows = [
+            [format_case_id_middle(cid, max_len=40), str(ecnt), tags_map.get(cid, "—")]
+            for cid, ecnt in zip(cids, ecnts)
+        ]
+        tooltips = {(i, 0): cid for i, cid in enumerate(cids)}
+
+        self._exp_raw_cids = cids
+        model = Simple3ColTableModel(headers, rows, self, tooltips=tooltips)
+        self.table_exp_cases.setModel(model)
+        # Interactive fixed widths keep 31.509+ rows instantaneous without freezing UI
+        hh = self.table_exp_cases.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Interactive)
+        hh.setSectionResizeMode(1, QHeaderView.Interactive)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table_exp_cases.setColumnWidth(0, 235)
+        self.table_exp_cases.setColumnWidth(1, 55)
+
+        if cids:
+            self.table_exp_cases.selectRow(0)
+            self._display_explorer_case_events(cids[0])
+
+    def _on_exp_case_clicked(self, idx: QModelIndex) -> None:
+        if not idx.isValid() or not hasattr(self, "_exp_raw_cids"):
+            return
+        row = idx.row()
+        if 0 <= row < len(self._exp_raw_cids):
+            cid = self._exp_raw_cids[row]
+            self._display_explorer_case_events(cid)
+
+    def _display_explorer_case_events(self, case_id: str) -> None:
+        b = self.bundle
+        if not b or not case_id:
+            return
+        ev_df = b.context.get_case_events(case_id)
+        if ev_df.empty:
+            return
+
+        # Case metadata
+        cs = b.context.case_summary_df
+        dur_d = 0.0
+        f_act = "-"
+        l_act = "-"
+        if case_id in cs.index:
+            row = cs.loc[case_id]
+            dur_d = float(row["duration_days"])
+            f_act = str(row["first_activity"])
+            l_act = str(row["last_activity"])
+
+        self.lbl_exp_summary.setText(
+            f"{format_case_id_middle(case_id, max_len=45)}: {fmt_int(len(ev_df))} event, durasi {fmt_num(dur_d, self.f02_precision)} hari"
+        )
+        self.lbl_exp_summary.setToolTip(str(case_id))
+        self.lbl_exp_flow.setText(f"Aktivitas awal: {f_act}, aktivitas akhir: {l_act}")
+
+        self._current_exp_ev_df = ev_df
+        self._render_explorer_events_table()
+
+    def _on_exp_detail_toggled(self, _) -> None:
+        self._render_explorer_events_table()
+
+    def _render_explorer_events_table(self) -> None:
+        if not hasattr(self, "_current_exp_ev_df") or self._current_exp_ev_df.empty:
+            return
+        df = self._current_exp_ev_df
+        show_detail = self.chk_exp_detail.isChecked()
+
+        if show_detail:
+            headers = ["Waktu", "Aktivitas", "Resource", "Offer ID", "Event ID"]
+        else:
+            headers = ["Waktu", "Aktivitas", "Resource"]
+
+        rows: List[List[Any]] = []
+        subtexts: Dict[Tuple[int, int], str] = {}
+        for idx_r, r in enumerate(df.itertuples(index=False)):
+            ts_str = format_timestamp_compact(str(getattr(r, "_2", "—") if hasattr(r, "_2") else "—"))
+            # Use safe column lookup via df row dict if needed; itertuples renames colons
+            rows.append([])
+
+        # Clean dict-based fast iteration preserving exact column names with colons
+        rows = []
+        for idx_r, rec in enumerate(df.to_dict(orient="records")):
+            ts_str = format_timestamp_compact(str(rec.get("time:timestamp", "—")))
+            act = str(rec.get("concept:name", "—"))
+            lc_raw = rec.get("lifecycle:transition", "")
+            lc = "" if pd.isna(lc_raw) else str(lc_raw).strip()
+            if lc:
+                subtexts[(idx_r, 1)] = f"lifecycle: {lc}"
+
+            res_raw = rec.get("org:resource", "")
+            res = "—" if pd.isna(res_raw) or not str(res_raw).strip() else str(res_raw).strip()
+            if show_detail:
+                off = str(rec.get("OfferID", "—") or "—")
+                eid = str(rec.get("EventID", "—") or "—")
+                rows.append([ts_str, act, res, off, eid])
+            else:
+                rows.append([ts_str, act, res])
+
+        model = Simple3ColTableModel(headers, rows, self, subtexts=subtexts)
+        self.table_exp_events.setModel(model)
+        self.table_exp_events.verticalHeader().setDefaultSectionSize(44 if subtexts else 32)
+        self.table_exp_events.resizeRowsToContents()
+        hh = self.table_exp_events.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeToContents)
         hh.setStretchLastSection(True)
 
-        col_widths = {
-            "Kode Soal": 68,
-            "Pertanyaan": 182,
-            "Aturan / Filter": 252,
-            "Jumlah Case Terpilih": 88,
-            "Denominator (Total Case Aktif)": 88,
-            "Persentase Case (%)": 90,
-            "Mean Cycle Time (Hari)": 86,
-            "Mean Cycle Time (Jam)": 80,
-            "Median Cycle Time (Hari)": 88,
-            "Jawaban Utama": 265,
-        }
-        for i, col_name in enumerate(df.columns):
-            w = col_widths.get(str(col_name), 110)
-            self.table_export_summary.setColumnWidth(i, w)
-        self.table_export_summary.resizeRowsToContents()
+    def _select_case_in_explorer(self, case_id: str) -> None:
+        self._set_active_tab(4)  # Switch to Case Explorer
+        self.cmb_exp_group.setCurrentIndex(0)
+        self.exp_search.setText(case_id)
+        self._display_explorer_case_events(case_id)
 
-    def _resize_f02_table_columns(self) -> None:
-        """Sets optimal interactive column widths for Tab F02 tables so key metrics are immediately visible."""
-        # Activity frequency table
-        df_act = self.model_f02_act.get_dataframe()
-        if not df_act.empty:
-            hh_act = self.table_f02_act.horizontalHeader()
-            hh_act.setSectionResizeMode(QHeaderView.Interactive)
-            hh_act.setStretchLastSection(True)
-            act_widths = {
-                "activity": 220,
-                "event_count": 85,
-                "complete_event_count": 95,
-                "event_pct": 75,
-                "case_count": 85,
-                "case_pct": 75,
-            }
-            for i, col in enumerate(df_act.columns):
-                w = act_widths.get(str(col), 90)
-                self.table_f02_act.setColumnWidth(i, w)
-
-        # Case summary table
-        df_cases = self.model_f02_cases.get_dataframe()
-        if not df_cases.empty:
-            hh_cases = self.table_f02_cases.horizontalHeader()
-            hh_cases.setSectionResizeMode(QHeaderView.Interactive)
-            hh_cases.setStretchLastSection(True)
-            case_widths = {
-                "case_id": 130,
-                "event_count": 75,
-                "duration_days": 110,
-                "speed_category": 125,
-                "first_activity": 150,
-                "last_activity": 150,
-                "duration_hours": 95,
-                "duration_seconds": 100,
-                "start_timestamp": 135,
-                "end_timestamp": 135,
-                "minmax_duration_days": 110,
-            }
-            for i, col in enumerate(df_cases.columns):
-                w = case_widths.get(str(col), 100)
-                self.table_f02_cases.setColumnWidth(i, w)
-
-    # ==================================================================
-    # EVENT HANDLERS & WORKFLOW LOGIC
-    # ==================================================================
-    def _set_busy(self, busy: bool, msg: str = "") -> None:
-        self.progress_bar.setVisible(busy)
-        if busy:
-            self.progress_bar.setRange(0, 0)  # Indeterminate busy indicator
+    # ------------------------------------------------------------------
+    # ACTIONS & LOGIC HANDLERS
+    # ------------------------------------------------------------------
+    def _toggle_drawer(self) -> None:
+        if self.drawer.isVisible():
+            self.drawer.hide()
         else:
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(100)
-        self.btn_top_import.setEnabled(not busy)
-        self.btn_top_bpic.setEnabled(not busy)
-        self.btn_top_synth.setEnabled(not busy)
-        self.btn_top_rerun.setEnabled((not busy) and (self.bundle is not None))
-        if msg:
-            self.status_bar.showMessage(msg)
+            self.drawer.show()
+
+    def _on_navigate_from_drawer(self, tab_idx: int) -> None:
+        self._set_active_tab(tab_idx)
+        self.drawer.hide()
+
+    def _show_about_dialog(self) -> None:
+        dlg = AboutDialog(self)
+        dlg.exec()
+
+    def _show_all_activities_dialog(self) -> None:
+        if not self.bundle:
+            return
+        dlg = ActivityListDialog(self.bundle.overview.activity_table, self)
+        dlg.exec()
+
+    def _show_case_duration_dialog(self) -> None:
+        if not self.bundle:
+            return
+        dlg = CaseDurationDialog(self.bundle.overview.case_table, self)
+        dlg.case_double_clicked.connect(self._select_case_in_explorer)
+        dlg.exec()
+
+    def _show_fast_slow_dialog(self) -> None:
+        if not self.bundle:
+            return
+        dlg = FastSlowDialog(self.bundle.overview, self)
+        dlg.exec()
+
+    def _show_ganti_data_menu(self) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background-color: {BG_CARD}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER}; "
+            f"border-radius: 8px; padding: 6px; }} "
+            f"QMenu::item {{ padding: 6px 14px; border-radius: 4px; }} "
+            f"QMenu::item:selected {{ background-color: {SELECTION_BG}; color: {SELECTION_TEXT}; }}"
+        )
+
+        act_browse = menu.addAction("Impor Berkas XES (.xes / .xes.gz)...")
+        act_browse.triggered.connect(self.on_browse_xes)
+
+        act_bpic = menu.addAction("Muat Dataset Utama BPIC17 (.xes.gz)")
+        act_bpic.triggered.connect(self.on_load_bpic17)
+
+        act_syn = menu.addAction("Muat Log Sintetis Edge Cases (10 Case)")
+        act_syn.triggered.connect(self.on_load_synthetic_log)
+
+        menu.addSeparator()
+
+        act_rerun = menu.addAction("Jalankan Ulang Semua Analisis")
+        act_rerun.triggered.connect(self.on_rerun_all)
+
+        pos = self.btn_ganti_data.mapToGlobal(QPoint(0, self.btn_ganti_data.height()))
+        menu.exec(pos)
 
     def on_browse_xes(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Pilih Berkas Event Log XES",
-            os.getcwd(),
-            "XES Event Log Files (*.xes *.xes.gz);;All Files (*)",
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pilih Berkas Event Log XES", os.getcwd(), "XES Files (*.xes *.xes.gz)"
         )
-        if file_path:
-            self.start_analysis(file_path)
+        if path:
+            self.start_analysis(path)
 
-    def on_load_default_bpic17(self) -> None:
-        candidates = [
-            os.path.join(os.getcwd(), "BPI Challenge 2017.xes.gz"),
-            os.path.join(os.getcwd(), "BPI Challenge 2017.xes"),
-        ]
-        for c in candidates:
-            if os.path.exists(c):
-                self.start_analysis(c)
+    def on_load_bpic17(self) -> None:
+        for cand in (
+            "data/BPI_Challenge_2017.xes.gz",
+            "BPI_Challenge_2017.xes.gz",
+            "data/BPI Challenge 2017.xes.gz",
+        ):
+            if os.path.exists(cand):
+                self.start_analysis(cand)
                 return
         QMessageBox.warning(
             self,
             "Berkas BPIC17 Tidak Ditemukan",
-            "Berkas 'BPI Challenge 2017.xes.gz' tidak ditemukan di folder kerja saat ini. Silakan pilih manual menggunakan tombol 'Impor XES...'.",
+            "Unduh dataset BPI Challenge 2017 (.xes.gz) dan letakkan di folder data/",
         )
 
     def on_load_synthetic_log(self) -> None:
@@ -1504,661 +2830,247 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Gagal Membuat Log Sintetis", str(exc))
 
     def on_rerun_all(self) -> None:
-        if self.bundle is None:
+        if not self.bundle:
             return
         self.start_analysis(self.bundle.report.file_path, existing_context=self.bundle.context)
 
     def start_analysis(self, file_path: str, existing_context: Optional[EventLogContext] = None) -> None:
-        if self.worker is not None and self.worker.isRunning():
-            return
-        self._set_busy(True, f"Memproses {os.path.basename(file_path)}...")
+        self.lbl_header_file.setText(os.path.basename(file_path))
+        self.badge_status.set_status("busy", "Memuat...")
+        self.pbar_load.setValue(5)
+        self.lbl_load_time.setText("Membaca XES...")
+        self.box_error.setVisible(False)
+        self.status_bar.showMessage("Siap.")
+
         self.worker = AnalysisWorker(file_path=file_path, existing_context=existing_context)
-        self.worker.progress_changed.connect(self.status_bar.showMessage)
+        self.worker.progress_changed.connect(self._on_analysis_progress)
         self.worker.finished_bundle.connect(self._on_analysis_finished)
         self.worker.failed_error.connect(self._on_analysis_failed)
         self.worker.start()
 
+    def _on_analysis_progress(self, pct: int, msg: str) -> None:
+        self.pbar_load.setValue(pct)
+        self.lbl_load_time.setText(msg)
+
     def _on_analysis_failed(self, err_msg: str) -> None:
-        self._set_busy(False, "Gagal memuat/memvalidasi berkas XES.")
-        self.card_f01_status.update_card("GAGAL / TIDAK VALID", "Lihat rincian pesan error di bawah")
-        self.txt_f01_validation.setHtml(
-            f"<h3 style='color:#dc2626;'>Impor atau Validasi XES Gagal</h3>"
-            f"<pre style='background:#fef2f2;padding:12px;border:1px solid #fecaca;color:#991b1b;'>{err_msg}</pre>"
-        )
+        self.badge_status.set_status("failed", "✕ Gagal")
+        self.pbar_load.setValue(0)
+        self.lbl_load_time.setText("Gagal memuat berkas.")
+        self.box_error.setVisible(True)
+        self.lbl_err_msg.setText(err_msg)
         QMessageBox.critical(self, "Kesalahan Impor / Validasi XES", err_msg)
 
     def _on_analysis_finished(self, bundle: FullAnalysisBundle) -> None:
         self.bundle = bundle
-        self._set_busy(
-            False,
-            f"Berhasil memuat {bundle.report.file_name} ({bundle.report.total_cases:,} case, {bundle.report.total_events:,} event) dalam {bundle.report.load_time_seconds:.2f} detik.",
-        )
-        self.lbl_active_dataset.setText(
-            f"Dataset Aktif: {bundle.report.file_name} ({bundle.report.file_size_mb:.2f} MB)  •  "
-            f"{bundle.report.total_cases:,} Unique Cases  •  {bundle.report.total_events:,} Events  •  "
-            f"Waktu Baca: {bundle.report.load_time_seconds:.2f} dtk"
-        )
+        rep = bundle.report
+        ov = bundle.overview
 
-        self._populate_f01(bundle)
-        self._populate_f02(bundle)
-        self._populate_f03(bundle)
-        self._populate_f04_f05(bundle)
-        self._populate_f06(bundle)
-        self._populate_f07(bundle)
+        self.badge_status.set_status("valid", "✓ Valid")
+        self.pbar_load.setValue(100)
+        self.lbl_load_time.setText(f"Data dimuat dalam {fmt_num(rep.load_time_seconds, 2)} detik.")
+        self.lbl_header_file.setText(rep.file_name)
+        self.status_bar.showMessage("Siap.")
 
-    # ------------------------------------------------------------------
-    # POPULATE UI TABS FROM BUNDLE
-    # ------------------------------------------------------------------
-    def _populate_f01(self, b: FullAnalysisBundle) -> None:
-        rep = b.report
-        self.card_f01_status.update_card("VALID (PM4Py)", f"{rep.file_name} ({rep.file_size_mb:.2f} MB) — {rep.load_time_seconds:.2f} dtk")
-        self.card_f01_cases.update_card(f"{rep.total_cases:,} Case", "Atribut case:concept:name tervalidasi")
-        self.card_f01_events.update_card(f"{rep.total_events:,} Event", f"Rata-rata {rep.total_events / max(rep.total_cases, 1):.2f} event/case")
-        lc_txt = "Ada" if rep.has_lifecycle else "Tidak Ada"
-        res_txt = "Ada" if rep.has_resource else "Tidak Ada"
-        self.card_f01_attrs.update_card(f"Lifecycle: {lc_txt} | Resource: {res_txt}", f"Transisi ({len(rep.lifecycle_values)}): {', '.join(rep.lifecycle_values)}")
+        # Precompute "Lolos di" tags per case_id in O(N)
+        c_set = set(bundle.ex117.sub_c.case_df["case_id"].astype(str)) if not bundle.ex117.sub_c.case_df.empty else set()
+        d_set = set(bundle.ex117.sub_d.case_df["case_id"].astype(str)) if not bundle.ex117.sub_d.case_df.empty else set()
+        e_set = set(bundle.ex117.sub_e.case_df["case_id"].astype(str)) if not bundle.ex117.sub_e.case_df.empty else set()
+        s15_set = set(bundle.ex1115.case_summary_df["case_id"].astype(str)) if not bundle.ex1115.case_summary_df.empty else set()
+        s18_set = set(bundle.ex1118.case_resource_summary_df["case_id"].astype(str)) if not bundle.ex1118.case_resource_summary_df.empty else set()
+        s22_set = set(bundle.ex1122.case_summary_df["case_id"].astype(str)) if not bundle.ex1122.case_summary_df.empty else set()
 
-        env = get_environment_info()
-        warn_html = ""
-        if rep.warnings:
-            warn_items = "".join(f"<li>{w}</li>" for w in rep.warnings)
-            warn_html = f"<div style='background:#fffbeb;border:1px solid #fde68a;padding:10px;border-radius:6px;margin-bottom:12px;'><b>Peringatan:</b><ul>{warn_items}</ul></div>"
+        tags_map: Dict[str, str] = {}
+        for cid in ov.case_table["case_id"].astype(str).tolist():
+            t = []
+            if cid in c_set:
+                t.append("C")
+            if cid in d_set:
+                t.append("D")
+            if cid in e_set:
+                t.append("E")
+            if cid in s15_set:
+                t.append("15")
+            if cid in s18_set:
+                t.append("18")
+            if cid in s22_set:
+                t.append("22")
+            if t:
+                tags_map[cid] = ", ".join(t)
+        self._case_category_tags = tags_map
 
-        trace_pills = " ".join(
-            f"<span style='display:inline-block;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:4px;padding:2px 7px;margin:2px;font-family:Consolas,monospace;font-size:12px;'>{a}</span>"
-            for a in rep.trace_attributes
-        )
-        event_pills = " ".join(
-            f"<span style='display:inline-block;background:#f1f5f9;color:#0f172a;border:1px solid #cbd5e1;border-radius:4px;padding:2px 7px;margin:2px;font-family:Consolas,monospace;font-size:12px;'>{a}</span>"
-            for a in rep.event_attributes
-        )
-        lc_pills = " ".join(
-            f"<span style='display:inline-block;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;border-radius:4px;padding:2px 7px;margin:2px;font-family:Consolas,monospace;font-size:12px;font-weight:600;'>{v}</span>"
-            for v in rep.lifecycle_values
-        )
+        # 1. Update Tab Data
+        self.card_cases.set_content(fmt_int(rep.total_cases), label="Case")
+        self.card_events.set_content(fmt_int(rep.total_events), label="Event")
+        self.card_acts.set_content(fmt_int(ov.unique_activities), label="Aktivitas")
+        self.card_resources.set_content(fmt_int(ov.unique_resources), label="Resource unik")
 
-        self.txt_f01_validation.setHtml(f"""
-        <div style="font-family:'Segoe UI',sans-serif;color:#0f172a;padding:4px 8px;line-height:1.55;">
-          <div style="background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #059669;border-radius:6px;padding:12px 14px;margin-bottom:12px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-              <span style="background:#d1fae5;color:#065f46;font-weight:700;padding:3px 8px;border-radius:4px;font-size:11px;">STATUS VALIDASI: LULUS</span>
-              <span style="color:#64748b;font-size:11.5px;float:right;">Ukuran: <b>{rep.file_size_mb:.2f} MB</b> &bull; Waktu Muat: <b>{rep.load_time_seconds:.2f} detik</b></span>
-            </div>
-            <div style="margin-top:6px;font-weight:800;color:#0f172a;font-size:15px;">
-              Berkas XES: <span style="color:#1e3a8a;">{rep.file_name}</span>
-            </div>
-            <div style="color:#64748b;font-size:11.5px;margin-top:3px;">
-              Path Sistem: <code style="background:#e2e8f0;color:#334155;padding:2px 6px;border-radius:4px;font-size:11px;">{rep.file_path}</code>
-            </div>
-          </div>
+        # Chips
+        has_cid = "case:concept:name" not in rep.missing_required and rep.is_valid
+        has_act = "concept:name" not in rep.missing_required and rep.is_valid
+        has_ts = "time:timestamp" not in rep.missing_required and rep.is_valid
+        self.chip_case_id.set_state(has_cid)
+        self.chip_concept_name.set_state(has_act)
+        self.chip_timestamp.set_state(has_ts)
+        self.chip_lifecycle.set_state(rep.has_lifecycle)
+        self.chip_resource.set_state(rep.has_resource)
 
-          {warn_html}
+        # Activity Bars (top 5)
+        while self.box_act_bars.count():
+            item = self.box_act_bars.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
 
-          <table width="100%" cellspacing="0" cellpadding="7" style="border-collapse:collapse;border:1px solid #cbd5e1;margin-bottom:12px;font-size:12.5px;">
-            <tr style="background:#f1f5f9;color:#1e293b;font-weight:700;">
-              <th align="left" width="28%" style="border-bottom:1px solid #cbd5e1;border-right:1px solid #cbd5e1;">Parameter Validasi F01</th>
-              <th align="left" width="22%" style="border-bottom:1px solid #cbd5e1;border-right:1px solid #cbd5e1;">Status / Nilai</th>
-              <th align="left" width="50%" style="border-bottom:1px solid #cbd5e1;">Keterangan &amp; Rincian Teknis</th>
-            </tr>
-            <tr>
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;"><b>Ukuran Berkas &amp; Waktu Baca</b></td>
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;color:#1e3a8a;font-weight:700;">{rep.file_size_mb:.2f} MB ({rep.load_time_seconds:.2f} dtk)</td>
-              <td style="border-bottom:1px solid #e2e8f0;">Diimpor melalui <code>pm4py.read_xes</code> di background worker thread (UI non-blocking)</td>
-            </tr>
-            <tr style="background:#f8fafc;">
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;"><b>Populasi Trace &amp; Event</b></td>
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;color:#059669;font-weight:700;">{rep.total_cases:,} Case &bull; {rep.total_events:,} Event</td>
-              <td style="border-bottom:1px solid #e2e8f0;">Atribut wajib <code>case:concept:name</code>, <code>concept:name</code>, dan <code>time:timestamp</code> lengkap 100%</td>
-            </tr>
-            <tr>
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;"><b>Atribut <code>lifecycle:transition</code></b></td>
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;color:#059669;font-weight:700;">{'Tersedia' if rep.has_lifecycle else 'Tidak Tersedia'} ({len(rep.lifecycle_values)} transisi)</td>
-              <td style="border-bottom:1px solid #e2e8f0;">{lc_pills}</td>
-            </tr>
-            <tr style="background:#f8fafc;">
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;"><b>Atribut <code>org:resource</code> &amp; <code>OfferID</code></b></td>
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;color:#7c3aed;font-weight:700;">{b.overview.unique_resources:,} Resource Valid</td>
-              <td style="border-bottom:1px solid #e2e8f0;"><code>org:resource</code>: {'Tersedia' if rep.has_resource else 'Tidak'} &bull; <code>OfferID</code>: {'Tersedia (digunakan pada analisis tambahan 11.22)' if rep.has_offer_id else 'Tidak Tersedia'}</td>
-            </tr>
-            <tr>
-              <td style="border-bottom:1px solid #e2e8f0;border-right:1px solid #e2e8f0;"><b>Atribut Level Trace ({len(rep.trace_attributes)})</b></td>
-              <td colspan="2" style="border-bottom:1px solid #e2e8f0;">{trace_pills}</td>
-            </tr>
-            <tr style="background:#f8fafc;">
-              <td style="border-right:1px solid #e2e8f0;"><b>Atribut Level Event ({len(rep.event_attributes)})</b></td>
-              <td colspan="2">{event_pills}</td>
-            </tr>
-          </table>
+        top5 = ov.activity_table.head(5)
+        max_cnt = top5["event_count"].max() if not top5.empty else 1
+        for _, r in top5.iterrows():
+            act_bar = BarAktivitas(str(r["activity"]), int(r["event_count"]), max_cnt)
+            self.box_act_bars.addWidget(act_bar)
 
-          <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin-bottom:10px;">
-            <div style="font-weight:700;color:#1e3a8a;margin-bottom:4px;">Prinsip Metodologi &amp; Konsistensi Perhitungan (Bagian 4 &amp; 7.1)</div>
-            <ul style="margin:4px 0 0 18px;padding:0;color:#1e293b;font-size:12.5px;">
-              <li><b>Urutan Deterministik dalam Trace:</b> Menggunakan posisi indeks asli event di dalam XES trace (<code>_trace_pos</code>) sehingga event dengan timestamp identik tetap terjaga urutannya secara eksak.</li>
-              <li><b>Perhitungan Cycle Time Utuh:</b> Durasi tiap case dihitung dari <i>timestamp event terakhir &minus; timestamp event pertama</i> pada trace utuh sebelum pemfilteran event apa pun.</li>
-            </ul>
-          </div>
+        self.btn_see_all_acts.setText(f"Lihat semua {ov.unique_activities} aktivitas")
 
-          <div style="font-size:12px;color:#475569;">
-            <b>Lingkungan Reproduktibilitas:</b> Python <code>{env['Python']}</code> &bull; PM4Py <code>{env['PM4Py']}</code> &bull; Pandas <code>{env['Pandas']}</code> &bull; PySide6 <code>{env['PySide6']}</code> &bull; r4pm <code>{env['r4pm (XES accelerator)']}</code>
-          </div>
-        </div>
-        """)
+        # Lifecycle Distribution Bars (Section 3a)
+        while self.box_lc_bars.count():
+            item = self.box_lc_bars.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
 
-    def _populate_f02(self, b: FullAnalysisBundle) -> None:
-        ov = b.overview
-        self.card_f02_cases.update_card(f"{ov.total_cases:,} Case", f"Min: {ov.min_cycle_time_days:.4f} hr | Max: {ov.max_cycle_time_days:.2f} hr")
-        self.card_f02_events.update_card(f"{ov.total_events:,} Event", f"{ov.unique_activities} Aktivitas Unik | {ov.unique_resources} Resource")
-        self.card_f02_meandur.update_card(
-            f"{ov.mean_cycle_time_days:.2f} Hari",
-            f"Presisi: {ov.mean_cycle_time_days:.4f} hr ({ov.mean_cycle_time_hours:.2f} jam) | Median: {ov.median_cycle_time_days:.2f} hr",
-        )
-        self.card_f02_fastslow.update_card(
-            f"Fast: {ov.fast_cases_count:,} ({ov.fast_cases_pct:.1f}%)",
-            f"Slow (>=45 hr): {ov.slow_cases_count:,} ({ov.slow_cases_pct:.1f}%)",
-        )
-        self.lbl_f02_timerange.setText(
-            f"Rentang Waktu Event Log: {format_timestamp_compact(str(ov.log_start_time))} UTC  s/d  {format_timestamp_compact(str(ov.log_end_time))} UTC   •   "
-            f"Simpangan Baku (Std Dev) Cycle Time: {ov.std_cycle_time_days:.4f} hari"
-        )
-        self.model_f02_act.set_dataframe(ov.activity_table)
-        self.model_f02_cases.set_dataframe(ov.case_table)
-        self._resize_f02_table_columns()
+        if ov.lifecycle_counts:
+            max_lc = max(ov.lifecycle_counts.values())
+            for lc_name, lc_cnt in ov.lifecycle_counts.items():
+                self.box_lc_bars.addWidget(BarAktivitas(lc_name, lc_cnt, max_lc))
+        else:
+            lbl_nolc = QLabel("Atribut lifecycle:transition tidak tersedia pada log ini.")
+            lbl_nolc.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 12px;")
+            self.box_lc_bars.addWidget(lbl_nolc)
 
-    def _populate_f03(self, b: FullAnalysisBundle) -> None:
-        r = b.ex117
-        self.card_117a.update_card(f"{r.sub_a.case_count:,} Case", "100.00% dari log aktif")
-        self.card_117b.update_card(
-            f"{r.sub_b.mean_duration_days:.2f} Hari",
-            f"Presisi: {r.sub_b.mean_duration_days:.4f} hr ({r.sub_b.mean_duration_hours:.2f} jam)",
-        )
-        self.card_117c.update_card(
-            f"{r.sub_c.case_count:,} Case ({r.sub_c.case_percentage:.2f}%)",
-            f"Mean Cycle Time: {r.sub_c.mean_duration_days:.2f} hr ({r.sub_c.mean_duration_days:.4f} hr)",
-        )
-        self.card_117d.update_card(
-            f"{r.sub_d.case_count:,} Case ({r.sub_d.case_percentage:.2f}%)",
-            f"Mean Cycle Time: {r.sub_d.mean_duration_days:.2f} hr ({r.sub_d.mean_duration_days:.4f} hr)",
-        )
-        self.card_117e.update_card(
-            f"{r.sub_e.case_count:,} Case ({r.sub_e.case_percentage:.2f}%)",
-            f"Mean Cycle Time: {r.sub_e.mean_duration_days:.2f} hr ({r.sub_e.mean_duration_days:.4f} hr)",
-        )
-        self.lbl_117_rule_note.setText(
-            f"Perbandingan Semantik Filter 11.7: "
-            f"(1) 11.7 C [Contains O_Accepted] = {r.sub_c.case_count:,} case (Mean {r.sub_c.mean_duration_days:.2f} hr). "
-            f"(2) 11.7 D [Contains O_Refused] = {r.sub_d.case_count:,} case (Mean {r.sub_d.mean_duration_days:.2f} hr). "
-            f"Irisan case yang memuat keduanya (O_Accepted & O_Refused) = {r.overlap_c_and_d_count:,} case. "
-            f"(3) 11.7 E [Event TERAKHIR == O_Cancelled] = {r.sub_e.case_count:,} case (Mean {r.sub_e.mean_duration_days:.2f} hr). "
-            f"(Sebagai perbandingan: terdapat {r.contains_cancelled_anywhere_count:,} case yang memuat O_Cancelled di posisi mana pun, namun {r.contains_cancelled_anywhere_count - r.sub_e.case_count:,} di antaranya masih diikuti aktivitas lain seperti W_Call after offers sehingga bukan berakhir di O_Cancelled)."
-        )
-        self._on_117_group_changed()
+        # Time range & Histogram
+        t_start = format_timestamp_compact(str(ov.log_start_time))
+        t_end = format_timestamp_compact(str(ov.log_end_time))
+        self.lbl_time_range.setText(f"{t_start} – {t_end}")
+        if not ov.case_table.empty:
+            self.hist_durasi.set_durations(ov.case_table["duration_days"].to_numpy())
+        else:
+            self.hist_durasi.set_durations([])
 
-    def _populate_f04_f05(self, b: FullAnalysisBundle) -> None:
-        r15 = b.ex1115
-        r18 = b.ex1118
-        self.card_1115_ans.update_card(
-            f"{r15.matching_case_count:,} Case",
-            f"Dari {r15.total_cases_denominator:,} case ({r15.matching_percentage:.4f}%)",
-        )
-        self.card_1115_excl.update_card(
-            f"{r15.excluded_by_lifecycle_count:,} Case Tereliminasi",
-            f"Semua lifecycle >=2x: {r15.cases_with_two_all_lifecycles:,} case vs Complete >=2x: {r15.matching_case_count:,} case",
-        )
-        self.card_1118_ans.update_card(
-            f"{r18.matching_case_count:,} Case",
-            f"Complete >=2x oleh resource identik ({r18.matching_percentage:.4f}%)",
-        )
-        self.card_1118_diff.update_card(
-            f"{len(r18.cases_from_1115_excluded_diff_resource):,} Case",
-            "Lolos 11.15 (>=2 complete) tetapi oleh resource berbeda/kosong",
-        )
+        # Refresh all precision-dependent numbers across Data, Jawaban, Detail
+        self._refresh_all_numbers_precision()
 
-        self.model_1115_cases.set_dataframe(r15.case_summary_df)
-        self.model_1118_cases.set_dataframe(r18.case_resource_summary_df)
-
-        cols_ev = [
-            c for c in ["case:concept:name", "_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "EventID", "Action"]
-            if c in r15.evidence_events_df.columns
-        ]
-        self.model_15_18_evidence.set_dataframe(
-            r15.evidence_events_df[cols_ev] if cols_ev else r15.evidence_events_df,
-            highlight_activities=[r15.target_activity],
-            highlight_lifecycle="complete",
-        )
-        self.lbl_15_18_evidence_title.setText(
-            f"Menampilkan seluruh {len(r15.evidence_events_df)} bukti kejadian 'complete' untuk {r15.matching_case_count} case yang lolos Exercise 11.15 (Klik baris case di atas untuk memfilter per case)."
-        )
-
-    def _populate_f06(self, b: FullAnalysisBundle) -> None:
-        r22 = b.ex1122
-        ans_prefix = "Ya, Ada" if r22.matching_case_count > 0 else "Tidak Ada"
-        self.card_1122_ans.update_card(
-            f"{ans_prefix}: {r22.matching_case_count:,} Case",
-            f"Memenuhi posisi i(O_Cancelled) < j(O_Accepted)",
-        )
-        self.card_1122_pct.update_card(
-            f"{r22.matching_percentage:.2f}% ({r22.matching_percentage:.4f}%)",
-            f"Denominator: {r22.matching_case_count:,} / {r22.total_cases_denominator:,} case aktif",
-        )
-        self.card_1122_rev.update_card(
-            f"{r22.reverse_only_count:,} Case",
-            f"Dari {r22.both_present_any_order_count:,} case yang memuat keduanya, {r22.reverse_only_count:,} hanya O_Accepted -> O_Cancelled",
-        )
-        self.card_1122_offer.update_card(
-            f"Same OfferID: {r22.same_offer_id_matching_count} Case",
-            "Penjelasan 7.3: Penawaran lama dibatalkan (O_Cancelled), lalu penawaran baru diterima (O_Accepted)",
-        )
-        self.model_1122_cases.set_dataframe(r22.case_summary_df)
-        self._apply_column_widths(
-            self.table_1122_cases,
-            r22.case_summary_df,
-            {
-                "case_id": 145,
-                "cancelled_trace_pos": 115,
-                "cancelled_timestamp": 140,
-                "cancelled_offer_id": 125,
-                "accepted_trace_pos": 115,
-                "accepted_timestamp": 140,
-                "accepted_offer_id": 125,
-                "intervening_events_count": 120,
-                "time_between_days": 120,
-                "trace_end_activity": 165,
-                "case_duration_days": 115,
-            },
-        )
-        cols_ev = [
-            c for c in ["case:concept:name", "_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "OfferID", "EventID"]
-            if c in r22.evidence_events_df.columns
-        ]
-        self.model_1122_evidence.set_dataframe(
-            r22.evidence_events_df[cols_ev].head(100) if cols_ev else r22.evidence_events_df.head(100),
-            highlight_activities=["O_Cancelled", "O_Accepted"],
-        )
-
-    def _populate_f07(self, b: FullAnalysisBundle) -> None:
+        # 3. Update Case Explorer
         self._on_explorer_group_changed()
-        sum_df = build_summary_dataframe(
-            b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
-        )
-        self.model_export_summary.set_dataframe(sum_df)
-        QTimer.singleShot(0, self._resize_summary_table_columns)
 
-    # ------------------------------------------------------------------
-    # INTERACTIVE FILTER & DRILL-DOWN HANDLERS
-    # ------------------------------------------------------------------
-    def _on_filter_f02_cases(self, text: str) -> None:
-        self.model_f02_cases.set_filter_text(text)
+        # 4. Update Checklist Drawer
+        is_syn = "synthetic" in rep.file_name.lower()
+        self.drawer.update_states(has_data=True, has_analysis=True, is_synthetic=is_syn, exported=self.has_exported)
+        self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
 
-    def _on_117_group_changed(self) -> None:
-        if self.bundle is None:
-            return
-        idx = self.cmb_117_group.currentIndex()
-        r = self.bundle.ex117
-        if idx == 0:
-            df = r.sub_c.case_df
-        elif idx == 1:
-            df = r.sub_d.case_df
-        elif idx == 2:
-            df = r.sub_e.case_df
-        else:
-            df = r.sub_a.case_df
-        self.model_117_cases.set_dataframe(df)
-        self._apply_column_widths(
-            self.table_117_cases,
-            df,
-            {
-                "case_id": 145,
-                "event_count": 85,
-                "start_timestamp": 140,
-                "end_timestamp": 140,
-                "first_activity": 165,
-                "last_activity": 165,
-                "duration_seconds": 105,
-                "duration_hours": 100,
-                "duration_days": 115,
-                "minmax_duration_days": 115,
-                "speed_category": 130,
-                "trigger_activity": 145,
-                "trigger_count": 95,
-            },
-        )
-
-    def _on_filter_117_table(self, text: str) -> None:
-        self.model_117_cases.set_filter_text(text)
-
-    def _on_filter_1122_table(self, text: str) -> None:
-        self.model_1122_cases.set_filter_text(text)
-
-    def _on_select_1115_case(self, index: QModelIndex) -> None:
-        if self.bundle is None or not index.isValid():
-            return
-        df_15 = self.model_1115_cases.get_dataframe()
-        cid = str(df_15.iloc[index.row()]["case_id"])
-        case_ev = self.bundle.context.get_case_events(cid)
-        fraud_ev = case_ev[case_ev["concept:name"].str.lower() == self.bundle.ex1115.target_activity.lower()]
-        cols = [c for c in ["case:concept:name", "_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "EventID"] if c in fraud_ev.columns]
-        self.model_15_18_evidence.set_dataframe(
-            fraud_ev[cols],
-            highlight_activities=[self.bundle.ex1115.target_activity],
-            highlight_lifecycle="complete",
-        )
-        self.lbl_15_18_evidence_title.setText(
-            f"Bukti Event 11.15 untuk Case {cid}: menampilkan seluruh event '{self.bundle.ex1115.target_activity}' (baris kuning = lifecycle 'complete' yang dihitung; baris biru = lifecycle lain seperti schedule/start/suspend/resume)."
-        )
-
-    def _on_select_1118_case(self, index: QModelIndex) -> None:
-        if self.bundle is None or not index.isValid():
-            return
-        df_18 = self.model_1118_cases.get_dataframe()
-        cid = str(df_18.iloc[index.row()]["case_id"])
-        rid = str(df_18.iloc[index.row()]["resource_id"])
-        case_ev = self.bundle.context.get_case_events(cid)
-        fraud_ev = case_ev[case_ev["concept:name"].str.lower() == self.bundle.ex1118.target_activity.lower()]
-        cols = [c for c in ["case:concept:name", "_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "EventID"] if c in fraud_ev.columns]
-        self.model_15_18_evidence.set_dataframe(
-            fraud_ev[cols],
-            highlight_activities=[self.bundle.ex1118.target_activity],
-            highlight_lifecycle="complete",
-            highlight_resource=rid,
-        )
-        self.lbl_15_18_evidence_title.setText(
-            f"Bukti Event 11.18 untuk Case {cid} (Resource Sama: {rid}): baris kuning menunjukkan >=2 kejadian 'complete' oleh resource {rid}."
-        )
-
-    def _on_show_excluded_lifecycle_case(self) -> None:
-        if self.bundle is None:
-            return
-        r15 = self.bundle.ex1115
-        if r15.example_excluded_case_id is None or r15.example_excluded_events_df.empty:
-            QMessageBox.information(self, "Info", "Tidak ada case yang tereliminasi oleh filter lifecycle complete pada dataset ini.")
-            return
-        cols = [c for c in ["case:concept:name", "_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "EventID"] if c in r15.example_excluded_events_df.columns]
-        self.model_15_18_evidence.set_dataframe(
-            r15.example_excluded_events_df[cols],
-            highlight_activities=[r15.target_activity],
-            highlight_lifecycle="complete",
-        )
-        self.lbl_15_18_evidence_title.setText(
-            f"CONTOH PEMBUKTIAN FILTER COMPLETE-ONLY (Bagian 7.2) — Case {r15.example_excluded_case_id}: Memiliki {len(r15.example_excluded_events_df)} event '{r15.target_activity}' (schedule/start/suspend/resume), namun hanya 1 yang berstatus 'complete' (baris kuning), sehingga TIDAK diloloskan oleh Exercise 11.15."
-        )
-
-    def _on_show_diff_resource_evidence(self) -> None:
-        if self.bundle is None:
-            return
-        r18 = self.bundle.ex1118
-        if r18.excluded_diff_resource_evidence_df.empty:
-            QMessageBox.information(self, "Info", "Tidak ada selisih case antara 11.15 dan 11.18.")
-            return
-        cols = [c for c in ["case:concept:name", "_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "EventID"] if c in r18.excluded_diff_resource_evidence_df.columns]
-        self.model_15_18_evidence.set_dataframe(
-            r18.excluded_diff_resource_evidence_df[cols],
-            highlight_activities=[r18.target_activity],
-            highlight_lifecycle="complete",
-        )
-        self.lbl_15_18_evidence_title.setText(
-            f"BUKTI PERBEDAAN 11.15 vs 11.18 — Menampilkan {len(r18.cases_from_1115_excluded_diff_resource)} case yang memiliki >=2 'complete' (lolos 11.15), tetapi diselesaikan oleh org:resource yang BERBEDA atau kosong (tidak lolos 11.18)."
-        )
-
-    def _on_select_1122_case(self, index: QModelIndex) -> None:
-        if self.bundle is None or not index.isValid():
-            return
-        df_22 = self.model_1122_cases.get_dataframe()
-        row = index.row()
-        if df_22.empty or row < 0 or row >= len(df_22):
-            return
-        cid = str(df_22.iloc[row]["case_id"])
-        ev = self.bundle.context.get_case_events(cid)
-        cols = [c for c in ["_trace_pos", "time:timestamp", "concept:name", "lifecycle:transition", "org:resource", "OfferID", "EventID"] if c in ev.columns]
-        self.model_1122_evidence.set_dataframe(
-            ev[cols],
-            highlight_activities=["O_Cancelled", "O_Accepted"],
-        )
-        self.lbl_1122_timeline_info.setText(
-            f"Trace Lengkap Case {cid} ({len(ev)} event): Baris kuning menandai urutan O_Cancelled yang kemudian diikuti oleh O_Accepted."
-        )
-
-    # ------------------------------------------------------------------
-    # CASE EXPLORER NAVIGATION (F07)
-    # ------------------------------------------------------------------
-    def _get_selected_case_id_from_table(self, table: QTableView, proxy: Optional[Any], model: DataFrameTableModel) -> Optional[str]:
-        idxs = table.selectionModel().selectedRows()
-        if not idxs:
-            curr = table.currentIndex()
-            if not curr.isValid():
-                return None
-            row_idx = proxy.mapToSource(curr).row() if proxy else curr.row()
-        else:
-            row_idx = proxy.mapToSource(idxs[0]).row() if proxy else idxs[0].row()
-
-        df = model.get_dataframe()
-        if df.empty or row_idx < 0 or row_idx >= len(df):
-            return None
-        col = "case_id" if "case_id" in df.columns else "case:concept:name"
-        return str(df.iloc[row_idx][col])
-
-    def _on_inspect_from_f02(self) -> None:
-        cid = self._get_selected_case_id_from_table(self.table_f02_cases, None, self.model_f02_cases)
-        if cid:
-            self.open_case_in_explorer(cid, filter_group_index=0)
-
-    def _on_inspect_from_117(self) -> None:
-        cid = self._get_selected_case_id_from_table(self.table_117_cases, None, self.model_117_cases)
-        if cid:
-            g_map = {0: 1, 1: 2, 2: 3, 3: 0}
-            self.open_case_in_explorer(cid, filter_group_index=g_map.get(self.cmb_117_group.currentIndex(), 0))
-
-    def _on_inspect_from_1115(self) -> None:
-        cid = self._get_selected_case_id_from_table(self.table_1115_cases, None, self.model_1115_cases)
-        if cid:
-            self.open_case_in_explorer(cid, filter_group_index=4)
-
-    def _on_inspect_from_1118(self) -> None:
-        cid = self._get_selected_case_id_from_table(self.table_1118_cases, None, self.model_1118_cases)
-        if cid:
-            self.open_case_in_explorer(cid, filter_group_index=5)
-
-    def _on_inspect_from_1122(self) -> None:
-        cid = self._get_selected_case_id_from_table(self.table_1122_cases, None, self.model_1122_cases)
-        if cid:
-            self.open_case_in_explorer(cid, filter_group_index=6)
-
-    def open_case_in_explorer(self, case_id: str, filter_group_index: int = 0) -> None:
-        self.tabs.setCurrentIndex(5)  # Switch to Case Explorer tab
-        self.cmb_explorer_filter.setCurrentIndex(filter_group_index)
-        self.txt_explorer_search.setText(case_id)
-        self._display_case_trace_in_explorer(case_id)
-
-    def _on_reset_explorer(self) -> None:
-        self.cmb_explorer_filter.setCurrentIndex(0)
-        self.txt_explorer_search.clear()
-
-    def _on_explorer_search_changed(self, text: str) -> None:
-        self.model_explorer_cases.set_filter_text(text)
-
-    def _on_explorer_group_changed(self) -> None:
-        if self.bundle is None:
-            return
-        idx = self.cmb_explorer_filter.currentIndex()
+    def _refresh_all_numbers_precision(self) -> None:
         b = self.bundle
-        total = b.overview.total_cases
+        if not b:
+            return
+        p = self.f02_precision
+        ov = b.overview
+        self._update_f02_durations(ov)
 
-        if idx == 0:
-            df = b.overview.case_table
-            rule = f"Semua Case Aktif: {len(df):,} / {total:,} case (100.00%)"
-            self._explorer_highlights = ([], None)
-        elif idx == 1:
-            df = b.ex117.sub_c.case_df
-            rule = f"[11.7 C] {b.ex117.sub_c.rule_description} | Lolos: {len(df):,} / {total:,} case ({b.ex117.sub_c.case_percentage:.2f}%)"
-            self._explorer_highlights = (["O_Accepted"], None)
-        elif idx == 2:
-            df = b.ex117.sub_d.case_df
-            rule = f"[11.7 D] {b.ex117.sub_d.rule_description} | Lolos: {len(df):,} / {total:,} case ({b.ex117.sub_d.case_percentage:.2f}%)"
-            self._explorer_highlights = (["O_Refused"], None)
-        elif idx == 3:
-            df = b.ex117.sub_e.case_df
-            rule = f"[11.7 E] {b.ex117.sub_e.rule_description} | Lolos: {len(df):,} / {total:,} case ({b.ex117.sub_e.case_percentage:.2f}%)"
-            self._explorer_highlights = (["O_Cancelled"], None)
-        elif idx == 4:
-            df = b.ex1115.case_summary_df
-            rule = f"[11.15] {b.ex1115.rule_description} | Lolos: {len(df):,} / {total:,} case ({b.ex1115.matching_percentage:.4f}%)"
-            self._explorer_highlights = ([b.ex1115.target_activity], "complete")
-        elif idx == 5:
-            df = b.ex1118.case_resource_summary_df
-            rule = f"[11.18] {b.ex1118.rule_description} | Lolos: {b.ex1118.matching_case_count:,} / {total:,} case ({b.ex1118.matching_percentage:.4f}%)"
-            self._explorer_highlights = ([b.ex1118.target_activity], "complete")
-        else:
-            df = b.ex1122.case_summary_df
-            rule = f"[11.22] {b.ex1122.rule_description} | Lolos: {len(df):,} / {total:,} case ({b.ex1122.matching_percentage:.2f}% / {b.ex1122.matching_percentage:.4f}%)"
-            self._explorer_highlights = (["O_Cancelled", "O_Accepted"], None)
-
-        self.lbl_explorer_rule_banner.setText(rule)
-        self.model_explorer_cases.set_dataframe(df)
-        self._apply_column_widths(
-            self.table_explorer_cases,
-            df,
-            {
-                "case_id": 145,
-                "event_count": 85,
-                "duration_days": 115,
-                "case_duration_days": 115,
-                "speed_category": 130,
-                "first_activity": 160,
-                "last_activity": 160,
-                "duration_hours": 100,
-                "duration_seconds": 105,
-                "start_timestamp": 140,
-                "end_timestamp": 140,
-                "minmax_duration_days": 115,
-                "resource_id": 110,
-                "same_resource_completions": 135,
-                "total_case_completions": 125,
-                "complete_occurrences": 110,
-                "all_lifecycle_occurrences": 120,
-                "resources_involved": 160,
-            },
+        # Fast vs Slow summary
+        self.lbl_fast_slow_summary.setText(
+            f"Fast (< 45 hari): {fmt_int(ov.fast_cases_count)} ({fmt_num(ov.fast_cases_pct, p)}%), "
+            f"Slow (>= 45 hari): {fmt_int(ov.slow_cases_count)} ({fmt_num(ov.slow_cases_pct, p)}%)"
         )
-        if not df.empty:
-            first_cid = str(df.iloc[0]["case_id"])
-            self._display_case_trace_in_explorer(first_cid)
 
-    def _on_explorer_case_clicked(self, index: QModelIndex) -> None:
-        if not index.isValid():
-            return
-        df = self.model_explorer_cases.get_dataframe()
-        row = index.row()
-        if not df.empty and 0 <= row < len(df):
-            cid = str(df.iloc[row]["case_id"])
-            self._display_case_trace_in_explorer(cid)
+        # Refresh Exercise 11.7, 11.15 & 11.18, and 11.22 tabs
+        self._render_tab_117()
+        self._render_tab_1518()
+        self._render_tab_1122()
 
-    def _display_case_trace_in_explorer(self, case_id: str) -> None:
-        if self.bundle is None:
-            return
-        ctx = self.bundle.context
-        ev = ctx.get_case_events(case_id)
-        if ev.empty:
-            return
-
-        cs = ctx.case_summary_df
-        if case_id in cs.index:
-            row = cs.loc[case_id]
-            dur_d = float(row["duration_days"])
-            dur_h = float(row["duration_hours"])
-            f_act = str(row["first_activity"])
-            l_act = str(row["last_activity"])
-            meta_txt = (
-                f"Case ID: {case_id}   •   Jumlah Event: {len(ev)}   •   "
-                f"Cycle Time: {dur_d:.4f} hari ({dur_h:.2f} jam)   •   "
-                f"Event Pertama: {f_act}   •   Event Terakhir: {l_act}"
-            )
+    def _update_f02_durations(self, ov: OverviewResult) -> None:
+        p = self.f02_precision
+        if self.f02_unit == "hari":
+            unit_s = "hari"
+            mean_val = f"{fmt_num(ov.mean_cycle_time_days, p)} hari"
+            min_v = fmt_num(ov.min_cycle_time_days, p)
+            med_v = fmt_num(ov.median_cycle_time_days, p)
+            max_v = fmt_num(ov.max_cycle_time_days, p)
+            std_v = f"{fmt_num(ov.std_cycle_time_days, p)} hari"
+        elif self.f02_unit == "jam":
+            unit_s = "jam"
+            mean_val = f"{fmt_num(ov.mean_cycle_time_hours, p)} jam"
+            min_v = fmt_num(ov.min_cycle_time_days * 24, p)
+            med_v = fmt_num(ov.median_cycle_time_days * 24, p)
+            max_v = fmt_num(ov.max_cycle_time_days * 24, p)
+            std_v = f"{fmt_num(ov.std_cycle_time_days * 24, p)} jam"
         else:
-            meta_txt = f"Case ID: {case_id} ({len(ev)} event)"
+            unit_s = "dtk"
+            mean_val = f"{fmt_int(round(ov.mean_cycle_time_days * 86400))} dtk"
+            min_v = fmt_int(round(ov.min_cycle_time_days * 86400))
+            med_v = fmt_int(round(ov.median_cycle_time_days * 86400))
+            max_v = fmt_int(round(ov.max_cycle_time_days * 86400))
+            std_v = f"{fmt_int(round(ov.std_cycle_time_days * 86400))} dtk"
 
-        self.lbl_explorer_case_meta.setText(meta_txt)
-
-        preferred_cols = [
-            "_trace_pos",
-            "time:timestamp",
-            "concept:name",
-            "lifecycle:transition",
-            "org:resource",
-            "OfferID",
-            "EventID",
-            "EventOrigin",
-            "Action",
-        ]
-        cols = [c for c in preferred_cols if c in ev.columns]
-        extra_cols = [c for c in ev.columns if c not in cols and c not in ("_event_idx", "case:concept:name")]
-        final_cols = cols + extra_cols
-
-        hl_acts, hl_lc = getattr(self, "_explorer_highlights", ([], None))
-        self.model_explorer_events.set_dataframe(
-            ev[final_cols],
-            highlight_activities=hl_acts,
-            highlight_lifecycle=hl_lc,
-        )
+        self.card_dur.set_content(mean_val, label="Rata-rata durasi")
+        self.lbl_dur_min.setText(f"{min_v} {unit_s}")
+        self.lbl_dur_med.setText(f"{med_v} {unit_s}")
+        self.lbl_dur_max.setText(f"{max_v} {unit_s}")
+        self.lbl_std_dev.setText(std_v)
 
     # ------------------------------------------------------------------
-    # EXPORT & ABOUT HANDLERS
+    # EXPORT DIALOG & EXPORT LOGIC
     # ------------------------------------------------------------------
-    def on_export_all(self) -> None:
-        if self.bundle is None:
-            QMessageBox.warning(self, "Belum Ada Hasil", "Silakan muat dan jalankan analisis pada file XES terlebih dahulu.")
+    def on_export_dialog(self) -> None:
+        if not self.bundle:
+            QMessageBox.warning(self, "Belum Ada Hasil", "Silakan muat berkas XES terlebih dahulu.")
             return
-        out_dir = QFileDialog.getExistingDirectory(self, "Pilih Folder Tujuan Ekspor CSV & HTML", os.getcwd())
-        if not out_dir:
-            return
-        try:
-            files = export_all_to_directory(
-                out_dir,
-                self.bundle.context,
-                self.bundle.overview,
-                self.bundle.ex117,
-                self.bundle.ex1115,
-                self.bundle.ex1118,
-                self.bundle.ex1122,
-            )
-            file_list = "\n".join(f"• {k}: {os.path.basename(v)}" for k, v in files.items())
-            QMessageBox.information(
-                self,
-                "Ekspor Berhasil",
-                f"Seluruh hasil analisis dan daftar bukti case berhasil diekspor ke:\n{out_dir}\n\nBerkas yang dibuat:\n{file_list}",
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "Gagal Mengekspor", str(exc))
 
-    def on_export_summary_csv(self) -> None:
-        if self.bundle is None:
-            QMessageBox.warning(self, "Belum Ada Hasil", "Silakan muat dan jalankan analisis pada file XES terlebih dahulu.")
+        dlg = ExportDialog(self)
+        if dlg.exec() != QDialog.Accepted:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Simpan Ringkasan Jawaban ke CSV",
-            os.path.join(os.getcwd(), "ringkasan_jawaban_bpic17.csv"),
-            "CSV Files (*.csv)",
-        )
-        if not path:
-            return
-        try:
-            df = self.model_export_summary.get_dataframe()
-            df.to_csv(path, index=False, encoding="utf-8-sig")
-            QMessageBox.information(self, "Berhasil Disimpan", f"Ringkasan jawaban berhasil disimpan ke:\n{path}")
-        except Exception as exc:
-            QMessageBox.critical(self, "Gagal Menyimpan CSV", str(exc))
 
-    def on_show_about(self) -> None:
-        env = get_environment_info()
-        QMessageBox.information(
-            self,
-            "Tentang Aplikasi & Reproduktibilitas",
-            f"<h3>Aplikasi Desktop Analisis Event Log BPIC17</h3>"
-            f"<p>Menjawab Latihan Bab 11 <i>Fundamentals of Business Process Management (FBPM)</i> "
-            f"(Exercise 11.7 A–E, 11.15, 11.18, dan 11.22) menggunakan Python &amp; PM4Py.</p>"
-            f"<p><b>Versi Lingkungan &amp; Dependency Utama:</b></p>"
-            f"<ul>"
-            f"<li><b>Python:</b> {env['Python']}</li>"
-            f"<li><b>PM4Py:</b> {env['PM4Py']}</li>"
-            f"<li><b>Pandas:</b> {env['Pandas']}</li>"
-            f"<li><b>PySide6 (Qt GUI):</b> {env['PySide6']}</li>"
-            f"<li><b>r4pm (XES Parser Accelerator):</b> {env['r4pm (XES accelerator)']}</li>"
-            f"</ul>",
-        )
+        choice = dlg.get_selected_option()
+        b = self.bundle
+
+        if choice == 1:
+            # Ringkasan jawaban CSV
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Simpan Ringkasan Jawaban CSV", "ringkasan_jawaban_bpic17.csv", "CSV Files (*.csv)"
+            )
+            if path:
+                sum_df = build_summary_dataframe(
+                    b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+                )
+                sum_df.to_csv(path, index=False, encoding="utf-8-sig")
+                self.has_exported = True
+                self.drawer.update_states(has_data=True, has_analysis=True, exported=True)
+                self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
+                QMessageBox.information(self, "Ekspor Berhasil", f"Ringkasan jawaban disimpan ke:\n{path}")
+
+        elif choice == 2:
+            # Daftar case terpilih CSV (folder)
+            out_dir = QFileDialog.getExistingDirectory(self, "Pilih Folder Tujuan Ekspor Case Terpilih")
+            if out_dir:
+                export_all_to_directory(
+                    out_dir, b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+                )
+                self.has_exported = True
+                self.drawer.update_states(has_data=True, has_analysis=True, exported=True)
+                self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
+                QMessageBox.information(self, "Ekspor Berhasil", f"Daftar case disimpan ke folder:\n{out_dir}")
+
+        elif choice == 3:
+            # HTML Report
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Simpan Laporan HTML", "laporan_analisis_bpic17.html", "HTML Files (*.html)"
+            )
+            if path:
+                sum_df = build_summary_dataframe(
+                    b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+                )
+                html_txt = generate_html_report(
+                    b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122, sum_df
+                )
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(html_txt)
+                self.has_exported = True
+                self.drawer.update_states(has_data=True, has_analysis=True, exported=True)
+                self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
+                QMessageBox.information(self, "Ekspor Berhasil", f"Laporan HTML disimpan ke:\n{path}")
