@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 import pandas as pd
-import pm4py
 
 
 def build_synthetic_edge_case_dataframe() -> pd.DataFrame:
@@ -108,6 +107,8 @@ def build_synthetic_edge_case_dataframe() -> pd.DataFrame:
 
 def generate_synthetic_xes_file(output_path: str) -> str:
     """Exports the synthetic edge-case event log to an XES file using PM4Py."""
+    import pm4py
+
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     df = build_synthetic_edge_case_dataframe()
     pm4py.write_xes(df, output_path, case_id_key="case:concept:name")
