@@ -10,12 +10,33 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 os.environ.setdefault("PM4PY_SHOW_CONSOLE_MESSAGE", "0")
 
+import numpy as np
 import pandas as pd
 import pm4py
 
 REQUIRED_COLUMNS = ["case:concept:name", "concept:name", "time:timestamp"]
 OPTIONAL_KEY_COLUMNS = ["lifecycle:transition", "org:resource", "OfferID", "EventID", "EventOrigin", "Action"]
 INVALID_RESOURCE_STRINGS = {"", "nan", "none", "null", "unknown", "undefined", "n/a", "-"}
+
+
+def is_valid_resource(val: Any) -> bool:
+    """Checks if a resource value is non-null, non-empty, and not a placeholder."""
+    if val is None or pd.isna(val):
+        return False
+    s = str(val).strip()
+    if s.lower() in INVALID_RESOURCE_STRINGS:
+        return False
+    return True
+
+
+def is_valid_activity(val: Any) -> bool:
+    """Checks if an activity name is non-null, non-empty, and not a placeholder."""
+    if val is None or pd.isna(val):
+        return False
+    s = str(val).strip()
+    if s.lower() in {"", "nan", "none", "null", "undefined"}:
+        return False
+    return True
 
 
 @dataclass
@@ -74,11 +95,17 @@ class EventLogContext:
         first_act = grp[act_col].first()
         last_act = grp[act_col].last()
 
-        duration_sec = (last_ts - first_ts).dt.total_seconds()
+        # Cycle time calculation:
+        # For chronological traces, (last_ts - first_ts) is equal to (max_ts - min_ts).
+        # For traces with non-chronological events (e.g., last_ts < first_ts),
+        # minmax_sec guarantees non-negative, accurate span of the case.
+        raw_duration_sec = (last_ts - first_ts).dt.total_seconds().fillna(0.0).to_numpy()
+        minmax_sec = (max_ts - min_ts).dt.total_seconds().fillna(0.0).to_numpy()
+
+        duration_sec = np.where(raw_duration_sec < 0, minmax_sec, raw_duration_sec)
         duration_days = duration_sec / 86400.0
         duration_hours = duration_sec / 3600.0
 
-        minmax_sec = (max_ts - min_ts).dt.total_seconds()
         minmax_days = minmax_sec / 86400.0
 
         summary = pd.DataFrame({
@@ -88,13 +115,13 @@ class EventLogContext:
             "end_timestamp": last_ts.array,
             "first_activity": first_act.to_numpy(),
             "last_activity": last_act.to_numpy(),
-            "duration_seconds": duration_sec.to_numpy(),
-            "duration_hours": duration_hours.to_numpy(),
-            "duration_days": duration_days.to_numpy(),
-            "minmax_duration_days": minmax_days.to_numpy(),
+            "duration_seconds": duration_sec,
+            "duration_hours": duration_hours,
+            "duration_days": duration_days,
+            "minmax_duration_days": minmax_days,
         })
         summary["speed_category"] = summary["duration_days"].apply(
-            lambda d: "Fast (< 45 hari)" if d < 45.0 else "Slow (>= 45 hari)"
+            lambda d: "Fast (< 45 hari)" if (pd.notna(d) and d < 45.0) else "Slow (>= 45 hari)"
         )
         summary.index = summary["case_id"]
         return summary
@@ -225,6 +252,28 @@ def load_and_validate_xes(
         progress_callback("Memvalidasi atribut wajib dan struktur trace...")
 
     cols = list(df.columns)
+
+    if len(df) == 0:
+        elapsed = time.time() - t0
+        report = ValidationReport(
+            is_valid=False,
+            file_path=file_path,
+            file_name=os.path.basename(file_path),
+            file_size_mb=file_size_mb,
+            load_time_seconds=elapsed,
+            total_cases=0,
+            total_events=0,
+            available_columns=cols,
+            trace_attributes=[c for c in cols if c.startswith("case:")],
+            event_attributes=[c for c in cols if not c.startswith("case:")],
+            has_lifecycle=False,
+            has_resource=False,
+            has_offer_id=False,
+            lifecycle_values=[],
+            error_message="Event log kosong (tidak memiliki event/trace).",
+        )
+        return None, report
+
     missing_req = [c for c in REQUIRED_COLUMNS if c not in cols]
     if missing_req:
         elapsed = time.time() - t0
@@ -248,7 +297,58 @@ def load_and_validate_xes(
         )
         return None, report
 
-    if len(df) == 0:
+    # Validate that mandatory columns have no empty / NaN / placeholder values
+    for req_col in REQUIRED_COLUMNS:
+        is_empty = df[req_col].isna() | df[req_col].astype(str).str.strip().str.lower().isin(["", "nan", "none", "null"])
+        invalid_count = int(is_empty.sum())
+        if invalid_count > 0:
+            elapsed = time.time() - t0
+            report = ValidationReport(
+                is_valid=False,
+                file_path=file_path,
+                file_name=os.path.basename(file_path),
+                file_size_mb=file_size_mb,
+                load_time_seconds=elapsed,
+                total_cases=0,
+                total_events=len(df),
+                available_columns=cols,
+                trace_attributes=[c for c in cols if c.startswith("case:")],
+                event_attributes=[c for c in cols if not c.startswith("case:")],
+                has_lifecycle="lifecycle:transition" in cols,
+                has_resource="org:resource" in cols,
+                has_offer_id="OfferID" in cols,
+                lifecycle_values=[],
+                missing_required=[],
+                error_message=f"Kolom wajib XES '{req_col}' memuat {invalid_count} baris bernilai kosong/NaN/tidak valid.",
+            )
+            return None, report
+
+    # Safe datetime parsing with error wrapping and NaT check
+    try:
+        df["time:timestamp"] = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
+        nat_count = int(df["time:timestamp"].isna().sum())
+        if nat_count > 0:
+            elapsed = time.time() - t0
+            report = ValidationReport(
+                is_valid=False,
+                file_path=file_path,
+                file_name=os.path.basename(file_path),
+                file_size_mb=file_size_mb,
+                load_time_seconds=elapsed,
+                total_cases=0,
+                total_events=len(df),
+                available_columns=cols,
+                trace_attributes=[c for c in cols if c.startswith("case:")],
+                event_attributes=[c for c in cols if not c.startswith("case:")],
+                has_lifecycle="lifecycle:transition" in cols,
+                has_resource="org:resource" in cols,
+                has_offer_id="OfferID" in cols,
+                lifecycle_values=[],
+                missing_required=[],
+                error_message=f"Gagal mem-parse timestamp pada kolom 'time:timestamp': ditemukan {nat_count} nilai tidak valid atau NaT.",
+            )
+            return None, report
+    except Exception as exc:
         elapsed = time.time() - t0
         report = ValidationReport(
             is_valid=False,
@@ -257,7 +357,7 @@ def load_and_validate_xes(
             file_size_mb=file_size_mb,
             load_time_seconds=elapsed,
             total_cases=0,
-            total_events=0,
+            total_events=len(df),
             available_columns=cols,
             trace_attributes=[c for c in cols if c.startswith("case:")],
             event_attributes=[c for c in cols if not c.startswith("case:")],
@@ -265,34 +365,63 @@ def load_and_validate_xes(
             has_resource="org:resource" in cols,
             has_offer_id="OfferID" in cols,
             lifecycle_values=[],
-            error_message="Event log kosong (tidak memiliki event/trace).",
+            missing_required=[],
+            error_message=f"Gagal mem-parse kolom 'time:timestamp': {exc}",
         )
         return None, report
 
     # Normalize types and preserve original XML sequence order
-    df["case:concept:name"] = df["case:concept:name"].astype(str)
-    df["concept:name"] = df["concept:name"].astype(str)
-    df["time:timestamp"] = pd.to_datetime(df["time:timestamp"], utc=True)
+    df["case:concept:name"] = df["case:concept:name"].astype(str).str.strip()
+    df["concept:name"] = df["concept:name"].astype(str).str.strip()
     df["_event_idx"] = range(len(df))
     df["_trace_pos"] = df.groupby("case:concept:name", sort=False).cumcount() + 1
 
-    has_lc = "lifecycle:transition" in cols
-    has_res = "org:resource" in cols
-    has_offer = "OfferID" in cols
-
     warnings: List[str] = []
+
+    # Detect non-chronological events within traces
+    ts_diffs = df.groupby("case:concept:name", sort=False)["time:timestamp"].diff()
+    non_chrono_mask = ts_diffs.dt.total_seconds() < 0
+    if non_chrono_mask.any():
+        non_chrono_cases = int(df.loc[non_chrono_mask, "case:concept:name"].nunique())
+        warnings.append(
+            f"Ditemukan {non_chrono_cases} trace dengan urutan event yang tidak berurutan secara kronologis "
+            f"(timestamp mundur); durasi per case diamankan menggunakan rentang (max - min) timestamp."
+        )
+
+    # Validate optional columns: lifecycle:transition
+    has_lc = False
     lc_values: List[str] = []
-    if has_lc:
-        lc_values = sorted(df["lifecycle:transition"].dropna().astype(str).unique().tolist())
+    if "lifecycle:transition" in cols:
+        lc_non_null = df["lifecycle:transition"].dropna().astype(str).str.strip()
+        lc_valid = lc_non_null[~lc_non_null.str.lower().isin(["", "nan", "none", "null", "undefined"])]
+        if len(lc_valid) > 0:
+            has_lc = True
+            lc_values = sorted(lc_valid.unique().tolist())
+        else:
+            warnings.append(
+                "Kolom 'lifecycle:transition' ada di berkas XES tetapi 100% nilainya kosong/tidak valid; semua event akan dianggap sebagai 'complete'."
+            )
     else:
         warnings.append(
             "Atribut 'lifecycle:transition' tidak tersedia di file XES ini; semua event akan dianggap sebagai 'complete'."
         )
 
-    if not has_res:
+    # Validate optional columns: org:resource
+    has_res = False
+    if "org:resource" in cols:
+        valid_res_count = int(df["org:resource"].apply(is_valid_resource).sum())
+        if valid_res_count > 0:
+            has_res = True
+        else:
+            warnings.append(
+                "Kolom 'org:resource' ada di berkas XES tetapi 100% nilainya kosong/tidak valid; analisis same-resource (Exercise 11.18) tidak akan menemukan resource yang valid."
+            )
+    else:
         warnings.append(
             "Atribut 'org:resource' tidak tersedia di file XES ini; analisis same-resource (Exercise 11.18) tidak akan menemukan resource yang valid."
         )
+
+    has_offer = "OfferID" in cols
 
     total_cases = int(df["case:concept:name"].nunique())
     total_events = int(len(df))

@@ -891,15 +891,21 @@ class MainWindow(QMainWindow):
         grp_cases = QGroupBox("Daftar Case && Durasi per Case (Klik Ganda untuk Buka di Case Explorer)")
         c_layout = QVBoxLayout(grp_cases)
         search_bar = QHBoxLayout()
-        self.txt_f02_search = QLineEdit()
-        self.txt_f02_search.setPlaceholderText("Cari Case ID atau nama aktivitas awal/akhir...")
-        self.txt_f02_search.textChanged.connect(self._on_filter_f02_cases)
-        btn_inspect_f02 = QPushButton("Buka Rincian Case Terpilih di Case Explorer")
-        btn_inspect_f02.clicked.connect(self._on_inspect_from_f02)
         lbl_f = QLabel("Filter Case:")
         lbl_f.setStyleSheet("font-weight: 600; color: #334155;")
+        self.txt_f02_search = QLineEdit()
+        self.txt_f02_search.setPlaceholderText("Cari Case ID, aktivitas awal/akhir, atau kategori durasi...")
+        self.txt_f02_search.textChanged.connect(self._on_filter_f02_cases)
+        self.btn_f02_reset = QPushButton("Reset Filter")
+        self.btn_f02_reset.setObjectName("SecondaryBtn")
+        self.btn_f02_reset.setToolTip("Hapus teks pencarian dan tampilkan seluruh case")
+        self.btn_f02_reset.clicked.connect(lambda: self.txt_f02_search.clear())
+        btn_inspect_f02 = QPushButton("Buka Rincian Case Terpilih di Case Explorer")
+        btn_inspect_f02.clicked.connect(self._on_inspect_from_f02)
+
         search_bar.addWidget(lbl_f)
         search_bar.addWidget(self.txt_f02_search, stretch=1)
+        search_bar.addWidget(self.btn_f02_reset)
         search_bar.addWidget(btn_inspect_f02)
         c_layout.addLayout(search_bar)
 
@@ -912,11 +918,13 @@ class MainWindow(QMainWindow):
         self.table_f02_cases = QTableView()
         self.table_f02_cases.setModel(self.proxy_f02_cases)
         self._configure_table(self.table_f02_cases, stretch_last=True)
+        # Sembunyikan vertical header agar tidak menampilkan nomor baris acak saat disortir
+        self.table_f02_cases.verticalHeader().setVisible(False)
         self.table_f02_cases.setSortingEnabled(True)
         self.table_f02_cases.doubleClicked.connect(lambda _: self._on_inspect_from_f02())
         c_layout.addWidget(self.table_f02_cases)
         splitter.addWidget(grp_cases)
-        splitter.setSizes([540, 780])
+        splitter.setSizes([500, 820])
 
         layout.addWidget(splitter, stretch=1)
         self.tabs.addTab(tab, "2. Overview && Statistika (F02)")
@@ -1308,6 +1316,49 @@ class MainWindow(QMainWindow):
             self.table_export_summary.setColumnWidth(i, w)
         self.table_export_summary.resizeRowsToContents()
 
+    def _resize_f02_table_columns(self) -> None:
+        """Sets optimal interactive column widths for Tab F02 tables so key metrics are immediately visible."""
+        # Activity frequency table
+        df_act = self.model_f02_act.get_dataframe()
+        if not df_act.empty:
+            hh_act = self.table_f02_act.horizontalHeader()
+            hh_act.setSectionResizeMode(QHeaderView.Interactive)
+            hh_act.setStretchLastSection(True)
+            act_widths = {
+                "activity": 220,
+                "event_count": 85,
+                "complete_event_count": 95,
+                "event_pct": 75,
+                "case_count": 85,
+                "case_pct": 75,
+            }
+            for i, col in enumerate(df_act.columns):
+                w = act_widths.get(str(col), 90)
+                self.table_f02_act.setColumnWidth(i, w)
+
+        # Case summary table
+        df_cases = self.model_f02_cases.get_dataframe()
+        if not df_cases.empty:
+            hh_cases = self.table_f02_cases.horizontalHeader()
+            hh_cases.setSectionResizeMode(QHeaderView.Interactive)
+            hh_cases.setStretchLastSection(True)
+            case_widths = {
+                "case_id": 130,
+                "event_count": 75,
+                "duration_days": 110,
+                "speed_category": 125,
+                "first_activity": 150,
+                "last_activity": 150,
+                "duration_hours": 95,
+                "duration_seconds": 100,
+                "start_timestamp": 135,
+                "end_timestamp": 135,
+                "minmax_duration_days": 110,
+            }
+            for i, col in enumerate(df_cases.columns):
+                w = case_widths.get(str(col), 100)
+                self.table_f02_cases.setColumnWidth(i, w)
+
     # ==================================================================
     # EVENT HANDLERS & WORKFLOW LOGIC
     # ==================================================================
@@ -1434,10 +1485,17 @@ class MainWindow(QMainWindow):
 
         self.txt_f01_validation.setHtml(f"""
         <div style="font-family:'Segoe UI',sans-serif;color:#0f172a;padding:4px 8px;line-height:1.55;">
-          <div style="background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #059669;border-radius:6px;padding:10px 14px;margin-bottom:12px;">
-            <span style="background:#d1fae5;color:#065f46;font-weight:700;padding:2px 8px;border-radius:4px;font-size:11px;">STATUS VALIDASI: LULUS</span>
-            <span style="margin-left:8px;font-weight:700;color:#0f172a;font-size:14px;">Laporan Validasi Event Log XES &amp; Struktur Atribut (F01)</span>
-            <div style="color:#475569;font-size:12px;margin-top:4px;">Lokasi Berkas: <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px;">{rep.file_path}</code></div>
+          <div style="background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #059669;border-radius:6px;padding:12px 14px;margin-bottom:12px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="background:#d1fae5;color:#065f46;font-weight:700;padding:3px 8px;border-radius:4px;font-size:11px;">STATUS VALIDASI: LULUS</span>
+              <span style="color:#64748b;font-size:11.5px;float:right;">Ukuran: <b>{rep.file_size_mb:.2f} MB</b> &bull; Waktu Muat: <b>{rep.load_time_seconds:.2f} detik</b></span>
+            </div>
+            <div style="margin-top:6px;font-weight:800;color:#0f172a;font-size:15px;">
+              Berkas XES: <span style="color:#1e3a8a;">{rep.file_name}</span>
+            </div>
+            <div style="color:#64748b;font-size:11.5px;margin-top:3px;">
+              Path Sistem: <code style="background:#e2e8f0;color:#334155;padding:2px 6px;border-radius:4px;font-size:11px;">{rep.file_path}</code>
+            </div>
           </div>
 
           {warn_html}
@@ -1510,6 +1568,7 @@ class MainWindow(QMainWindow):
         )
         self.model_f02_act.set_dataframe(ov.activity_table)
         self.model_f02_cases.set_dataframe(ov.case_table)
+        self._resize_f02_table_columns()
 
     def _populate_f03(self, b: FullAnalysisBundle) -> None:
         r = b.ex117
