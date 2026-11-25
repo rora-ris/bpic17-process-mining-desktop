@@ -6,13 +6,32 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 os.environ.setdefault("PM4PY_SHOW_CONSOLE_MESSAGE", "0")
 
 import numpy as np
 import pandas as pd
-import pm4py
+
+
+def _pkg_version(pkg_name: str, module_name: Optional[str] = None, fallback: str = "unknown") -> str:
+    """Returns package version without importing heavy modules eagerly."""
+    mod = sys.modules.get(module_name or pkg_name)
+    if mod is not None and hasattr(mod, "__version__"):
+        return str(getattr(mod, "__version__"))
+    try:
+        return importlib_metadata.version(pkg_name)
+    except importlib_metadata.PackageNotFoundError:
+        return fallback
+
+
+def _ensure_stripped_str(s: pd.Series) -> pd.Series:
+    """Returns stripped string Series, avoiding full-column copy if already clean strings."""
+    uniq = s.unique()
+    if all(type(v) is str and v == v.strip() for v in uniq):
+        return s
+    return s.map({v: str(v).strip() for v in uniq})
 
 REQUIRED_COLUMNS = ["case:concept:name", "concept:name", "time:timestamp"]
 OPTIONAL_KEY_COLUMNS = ["lifecycle:transition", "org:resource", "OfferID", "EventID", "EventOrigin", "Action"]
@@ -67,6 +86,7 @@ class EventLogContext:
     def __init__(self, df: pd.DataFrame, report: ValidationReport):
         self.df = df
         self.report = report
+        self._case_indices: Optional[Dict[str, np.ndarray]] = None
 
         # Precompute case-level summary table (preserving trace context)
         self.case_summary_df = self._build_case_summary(df)
@@ -120,8 +140,10 @@ class EventLogContext:
             "duration_days": duration_days,
             "minmax_duration_days": minmax_days,
         })
-        summary["speed_category"] = summary["duration_days"].apply(
-            lambda d: "Fast (< 45 hari)" if (pd.notna(d) and d < 45.0) else "Slow (>= 45 hari)"
+        summary["speed_category"] = np.where(
+            np.isfinite(duration_days) & (duration_days < 45.0),
+            "Fast (< 45 hari)",
+            "Slow (>= 45 hari)",
         )
         summary.index = summary["case_id"]
         return summary
@@ -139,7 +161,11 @@ class EventLogContext:
 
         has_lc = "lifecycle:transition" in df.columns
         if has_lc:
-            comp_df = df[df["lifecycle:transition"].astype(str).str.lower() == "complete"]
+            comp_vals = [
+                v for v in df["lifecycle:transition"].dropna().unique()
+                if str(v).lower() == "complete"
+            ]
+            comp_df = df[df["lifecycle:transition"].isin(comp_vals)]
             comp_event_counts = comp_df[act_col].value_counts()
         else:
             comp_event_counts = event_counts
@@ -160,7 +186,15 @@ class EventLogContext:
 
     def get_case_events(self, case_id: str) -> pd.DataFrame:
         """Returns all events belonging to a specific case ID in exact trace order."""
-        sub = self.df[self.df["case:concept:name"].astype(str) == str(case_id)].copy()
+        if self._case_indices is None:
+            self._case_indices = {
+                str(k): idx
+                for k, idx in self.df.groupby("case:concept:name", sort=False).indices.items()
+            }
+        idx = self._case_indices.get(str(case_id))
+        if idx is None or len(idx) == 0:
+            return self.df.iloc[0:0].copy()
+        sub = self.df.iloc[idx].copy()
         if "_trace_pos" in sub.columns:
             sub = sub.sort_values("_trace_pos", kind="mergesort")
         return sub
@@ -168,22 +202,13 @@ class EventLogContext:
 
 def get_environment_info() -> Dict[str, str]:
     """Returns Python, PM4Py, Pandas, and PySide6 versions for reproducibility (Section 7.1)."""
-    info = {
+    return {
         "Python": sys.version.split()[0],
-        "PM4Py": getattr(pm4py, "__version__", "unknown"),
-        "Pandas": getattr(pd, "__version__", "unknown"),
+        "PM4Py": _pkg_version("pm4py"),
+        "Pandas": _pkg_version("pandas"),
+        "PySide6": _pkg_version("PySide6", fallback="not installed"),
+        "r4pm (XES accelerator)": _pkg_version("r4pm", fallback="not installed"),
     }
-    try:
-        import PySide6
-        info["PySide6"] = getattr(PySide6, "__version__", "unknown")
-    except ImportError:
-        info["PySide6"] = "not installed"
-    try:
-        import r4pm
-        info["r4pm (XES accelerator)"] = getattr(r4pm, "__version__", "installed")
-    except ImportError:
-        info["r4pm (XES accelerator)"] = "not installed"
-    return info
 
 
 def load_and_validate_xes(
@@ -221,11 +246,13 @@ def load_and_validate_xes(
         if progress_callback:
             progress_callback(f"Mengimpor event log XES dengan PM4Py ({file_size_mb:.2f} MB)...")
 
+        import pm4py
+
         raw_log = pm4py.read_xes(file_path)
         if not isinstance(raw_log, pd.DataFrame):
             df = pm4py.convert_to_dataframe(raw_log)
         else:
-            df = raw_log.copy()
+            df = raw_log
 
     except Exception as exc:
         elapsed = time.time() - t0
@@ -299,8 +326,21 @@ def load_and_validate_xes(
 
     # Validate that mandatory columns have no empty / NaN / placeholder values
     for req_col in REQUIRED_COLUMNS:
-        is_empty = df[req_col].isna() | df[req_col].astype(str).str.strip().str.lower().isin(["", "nan", "none", "null"])
-        invalid_count = int(is_empty.sum())
+        col_series = df[req_col]
+        if pd.api.types.is_datetime64_any_dtype(col_series):
+            invalid_count = int(col_series.isna().sum())
+        else:
+            na_mask = col_series.isna()
+            non_na = col_series[~na_mask]
+            bad_vals = {
+                v for v in non_na.unique()
+                if str(v).strip().lower() in {"", "nan", "none", "null"}
+            }
+            invalid_count = (
+                int(na_mask.sum() + non_na.isin(bad_vals).sum())
+                if bad_vals
+                else int(na_mask.sum())
+            )
         if invalid_count > 0:
             elapsed = time.time() - t0
             report = ValidationReport(
@@ -325,7 +365,14 @@ def load_and_validate_xes(
 
     # Safe datetime parsing with error wrapping and NaT check
     try:
-        df["time:timestamp"] = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
+        ts_series = df["time:timestamp"]
+        if pd.api.types.is_datetime64_any_dtype(ts_series):
+            if ts_series.dt.tz is None:
+                df["time:timestamp"] = ts_series.dt.tz_localize("UTC")
+            else:
+                df["time:timestamp"] = ts_series.dt.tz_convert("UTC")
+        else:
+            df["time:timestamp"] = pd.to_datetime(ts_series, utc=True, errors="coerce")
         nat_count = int(df["time:timestamp"].isna().sum())
         if nat_count > 0:
             elapsed = time.time() - t0
@@ -371,9 +418,9 @@ def load_and_validate_xes(
         return None, report
 
     # Normalize types and preserve original XML sequence order
-    df["case:concept:name"] = df["case:concept:name"].astype(str).str.strip()
-    df["concept:name"] = df["concept:name"].astype(str).str.strip()
-    df["_event_idx"] = range(len(df))
+    df["case:concept:name"] = _ensure_stripped_str(df["case:concept:name"])
+    df["concept:name"] = _ensure_stripped_str(df["concept:name"])
+    df["_event_idx"] = np.arange(len(df))
     df["_trace_pos"] = df.groupby("case:concept:name", sort=False).cumcount() + 1
 
     warnings: List[str] = []
@@ -392,11 +439,15 @@ def load_and_validate_xes(
     has_lc = False
     lc_values: List[str] = []
     if "lifecycle:transition" in cols:
-        lc_non_null = df["lifecycle:transition"].dropna().astype(str).str.strip()
-        lc_valid = lc_non_null[~lc_non_null.str.lower().isin(["", "nan", "none", "null", "undefined"])]
-        if len(lc_valid) > 0:
+        lc_vals_raw = df["lifecycle:transition"].dropna().unique()
+        lc_clean = {
+            str(v).strip()
+            for v in lc_vals_raw
+            if str(v).strip().lower() not in {"", "nan", "none", "null", "undefined"}
+        }
+        if lc_clean:
             has_lc = True
-            lc_values = sorted(lc_valid.unique().tolist())
+            lc_values = sorted(lc_clean)
         else:
             warnings.append(
                 "Kolom 'lifecycle:transition' ada di berkas XES tetapi 100% nilainya kosong/tidak valid; semua event akan dianggap sebagai 'complete'."
@@ -409,10 +460,8 @@ def load_and_validate_xes(
     # Validate optional columns: org:resource
     has_res = False
     if "org:resource" in cols:
-        valid_res_count = int(df["org:resource"].apply(is_valid_resource).sum())
-        if valid_res_count > 0:
-            has_res = True
-        else:
+        has_res = any(is_valid_resource(v) for v in df["org:resource"].dropna().unique())
+        if not has_res:
             warnings.append(
                 "Kolom 'org:resource' ada di berkas XES tetapi 100% nilainya kosong/tidak valid; analisis same-resource (Exercise 11.18) tidak akan menemukan resource yang valid."
             )

@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-import pm4py
 
 from .core import INVALID_RESOURCE_STRINGS, EventLogContext, is_valid_activity, is_valid_resource
 
@@ -146,12 +145,10 @@ def analyze_overview(ctx: EventLogContext) -> OverviewResult:
     total_events = len(df)
     
     # Filter valid activities consistently with valid resources
-    valid_acts = df["concept:name"][df["concept:name"].apply(is_valid_activity)]
-    unique_acts = int(valid_acts.nunique())
+    unique_acts = sum(1 for v in df["concept:name"].dropna().unique() if is_valid_activity(v))
 
     if "org:resource" in df.columns:
-        valid_res = df["org:resource"][df["org:resource"].apply(is_valid_resource)]
-        unique_res = int(valid_res.nunique())
+        unique_res = sum(1 for v in df["org:resource"].dropna().unique() if is_valid_resource(v))
     else:
         unique_res = 0
 
@@ -282,12 +279,9 @@ def analyze_exercise_11_7(ctx: EventLogContext) -> Exercise117Result:
     )
 
     # 11.7 C: Successful cases -> Case CONTAINS at least one event O_Accepted
-    # Use pm4py.filter_trace_attribute_values to retain full traces containing O_Accepted
-    filtered_c_df = pm4py.filter_trace_attribute_values(
-        df, act_col, ["O_Accepted"], retain=True, case_id_key=case_col
-    )
-    c_case_ids = filtered_c_df[case_col].unique()
-    c_occurrences = df[df[act_col] == "O_Accepted"].groupby(case_col).size()
+    c_mask = df[act_col] == "O_Accepted"
+    c_case_ids = df.loc[c_mask, case_col].unique()
+    c_occurrences = df.loc[c_mask].groupby(case_col, sort=False).size()
     cs_c = cs.loc[cs.index.intersection(c_case_ids)].copy()
     cs_c["trigger_activity"] = "O_Accepted"
     cs_c["trigger_count"] = cs_c["case_id"].map(c_occurrences).fillna(0).astype(int)
@@ -302,11 +296,9 @@ def analyze_exercise_11_7(ctx: EventLogContext) -> Exercise117Result:
     )
 
     # 11.7 D: Unsuccessful cases -> Case CONTAINS at least one event O_Refused
-    filtered_d_df = pm4py.filter_trace_attribute_values(
-        df, act_col, ["O_Refused"], retain=True, case_id_key=case_col
-    )
-    d_case_ids = filtered_d_df[case_col].unique()
-    d_occurrences = df[df[act_col] == "O_Refused"].groupby(case_col).size()
+    d_mask = df[act_col] == "O_Refused"
+    d_case_ids = df.loc[d_mask, case_col].unique()
+    d_occurrences = df.loc[d_mask].groupby(case_col, sort=False).size()
     cs_d = cs.loc[cs.index.intersection(d_case_ids)].copy()
     cs_d["trigger_activity"] = "O_Refused"
     cs_d["trigger_count"] = cs_d["case_id"].map(d_occurrences).fillna(0).astype(int)
@@ -321,13 +313,9 @@ def analyze_exercise_11_7(ctx: EventLogContext) -> Exercise117Result:
     )
 
     # 11.7 E: Canceled cases -> LAST event in trace is O_Cancelled
-    # Use pm4py.filter_end_activities to select traces whose final event is O_Cancelled
-    filtered_e_df = pm4py.filter_end_activities(
-        df, ["O_Cancelled"], retain=True, case_id_key=case_col, activity_key=act_col, timestamp_key="time:timestamp"
-    )
-    # To guarantee exact trace-order endpoint consistency (Section 4 & 7.1: "Event TERAKHIR pada urutan trace"):
+    # Guarantee exact trace-order endpoint consistency (Section 4 & 7.1: "Event TERAKHIR pada urutan trace"):
     cs_e = cs[cs["last_activity"] == "O_Cancelled"].copy()
-    e_occurrences = df[df[act_col] == "O_Cancelled"].groupby(case_col).size()
+    e_occurrences = df.loc[df[act_col] == "O_Cancelled"].groupby(case_col, sort=False).size()
     cs_e["trigger_activity"] = "O_Cancelled (Endpoint)"
     cs_e["trigger_count"] = cs_e["case_id"].map(e_occurrences).fillna(0).astype(int)
 
@@ -377,7 +365,11 @@ def analyze_exercise_11_15(
     res_col = "org:resource"
 
     target_lower = target_activity.strip().lower()
-    act_events = df[df[act_col].str.strip().str.lower() == target_lower].copy()
+    matching_acts = [
+        v for v in df[act_col].dropna().unique()
+        if str(v).strip().lower() == target_lower
+    ]
+    act_events = df[df[act_col].isin(matching_acts)].copy()
 
     # Count all lifecycle occurrences per case for comparison (Section 7.2)
     all_lc_counts = act_events.groupby(case_col, sort=False).size()
@@ -461,15 +453,17 @@ def analyze_exercise_11_18(
     target_activity: str = "W_Assess potential fraud",
     min_occurrences: int = 2,
     complete_only: bool = True,
+    res_1115: Optional[Exercise1115Result] = None,
 ) -> Exercise1118Result:
     """F05 — Analyzes cases where target_activity is completed >= 2 times by the SAME valid resource.
 
     Explicitly excludes missing/empty/unknown resource values so two blank resources
     are never treated as the same resource (Section 4 & F05).
     """
-    res_1115 = analyze_exercise_11_15(
-        ctx, target_activity=target_activity, min_occurrences=min_occurrences, complete_only=complete_only
-    )
+    if res_1115 is None:
+        res_1115 = analyze_exercise_11_15(
+            ctx, target_activity=target_activity, min_occurrences=min_occurrences, complete_only=complete_only
+        )
     df = ctx.df
     cs = ctx.case_summary_df
     total_cases = len(cs)
@@ -494,7 +488,11 @@ def analyze_exercise_11_18(
         )
 
     target_lower = target_activity.strip().lower()
-    act_events = df[df[act_col].str.strip().str.lower() == target_lower].copy()
+    matching_acts = [
+        v for v in df[act_col].dropna().unique()
+        if str(v).strip().lower() == target_lower
+    ]
+    act_events = df[df[act_col].isin(matching_acts)].copy()
     if complete_only and (lc_col in df.columns):
         comp_events = act_events[act_events[lc_col].astype(str).str.strip().str.lower() == "complete"].copy()
     else:
