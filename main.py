@@ -15,17 +15,17 @@ from src.gui import MainWindow
 
 
 def _apply_light_palette(app: QApplication) -> None:
-    """Forces a crisp light palette so Windows Dark Mode never bleeds into Fusion widgets."""
+    """Forces the official Light Mode palette so Windows Dark Mode never bleeds into Fusion widgets."""
     pal = QPalette()
-    pal.setColor(QPalette.Window, QColor("#f8fafc"))
-    pal.setColor(QPalette.WindowText, QColor("#0f172a"))
-    pal.setColor(QPalette.Base, QColor("#ffffff"))
-    pal.setColor(QPalette.AlternateBase, QColor("#f8fafc"))
-    pal.setColor(QPalette.Text, QColor("#0f172a"))
-    pal.setColor(QPalette.Button, QColor("#ffffff"))
-    pal.setColor(QPalette.ButtonText, QColor("#0f172a"))
-    pal.setColor(QPalette.Highlight, QColor("#dbeafe"))
-    pal.setColor(QPalette.HighlightedText, QColor("#1e3a8a"))
+    pal.setColor(QPalette.Window, QColor("#F5F7FB"))
+    pal.setColor(QPalette.WindowText, QColor("#0F172A"))
+    pal.setColor(QPalette.Base, QColor("#FFFFFF"))
+    pal.setColor(QPalette.AlternateBase, QColor("#F8FAFC"))
+    pal.setColor(QPalette.Text, QColor("#0F172A"))
+    pal.setColor(QPalette.Button, QColor("#FFFFFF"))
+    pal.setColor(QPalette.ButtonText, QColor("#0F172A"))
+    pal.setColor(QPalette.Highlight, QColor("#EEF2FF"))
+    pal.setColor(QPalette.HighlightedText, QColor("#1E3A8A"))
     app.setPalette(pal)
 
 
@@ -50,7 +50,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     _apply_light_palette(app)
-    app.setApplicationName("ProcessMine Studio — Loan Process Analytics")
+    app.setApplicationName("BPIC17 Event Log Analyzer")
     window = MainWindow()
     window.show()
 
