@@ -87,6 +87,7 @@ from .exporter import (
     build_summary_dataframe,
     export_all_to_directory,
     generate_html_report,
+    get_export_target_dataframe,
 )
 from .synthetic import generate_synthetic_xes_file
 
@@ -220,6 +221,34 @@ QComboBox QAbstractItemView {{
     selection-background-color: {SELECTION_BG};
     selection-color: {SELECTION_TEXT};
     padding: 4px;
+}}
+
+QRadioButton {{
+    background: transparent;
+    color: {TEXT_PRIMARY};
+    spacing: 10px;
+    font-size: 14px;
+    font-weight: 600;
+}}
+
+QRadioButton::indicator {{
+    width: 14px;
+    height: 14px;
+    border-radius: 9px;
+    border: 2px solid #94A3B8;
+    background-color: {BG_CARD};
+}}
+
+QRadioButton::indicator:hover {{
+    border-color: {BLUE_LINK};
+}}
+
+QRadioButton::indicator:checked {{
+    width: 8px;
+    height: 8px;
+    border-radius: 9px;
+    border: 5px solid {NAVY};
+    background-color: {BG_CARD};
 }}
 
 /* Tables */
@@ -1288,63 +1317,189 @@ class FastSlowDialog(QDialog):
         layout.addWidget(btn, alignment=Qt.AlignRight)
 
 
+class _ExportOptionRow(QFrame):
+    """Selectable option card for ExportDialog with visible radio indicator and description."""
+
+    def __init__(
+        self,
+        radio: QRadioButton,
+        subtitle: str,
+        extra_widget: Optional[QWidget] = None,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self.radio = radio
+        self.setObjectName("ExportOptionRow")
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(6)
+
+        self.radio.setCursor(QCursor(Qt.PointingHandCursor))
+        layout.addWidget(self.radio)
+
+        lbl_sub = QLabel(subtitle)
+        lbl_sub.setWordWrap(True)
+        lbl_sub.setStyleSheet(
+            f"background: transparent; border: none; color: {TEXT_MUTED}; "
+            f"font-size: 12px; padding-left: 28px;"
+        )
+        layout.addWidget(lbl_sub)
+
+        if extra_widget is not None:
+            extra_row = QHBoxLayout()
+            extra_row.setContentsMargins(28, 4, 0, 0)
+            extra_row.addWidget(extra_widget)
+            layout.addLayout(extra_row)
+
+        self.set_selected(False)
+
+    def set_selected(self, selected: bool) -> None:
+        if selected:
+            self.setStyleSheet(
+                f"QFrame#ExportOptionRow {{ background-color: {SELECTION_BG}; "
+                f"border: 1.5px solid {BLUE_LINK}; border-radius: 10px; }}"
+            )
+        else:
+            self.setStyleSheet(
+                f"QFrame#ExportOptionRow {{ background-color: {BG_CARD}; "
+                f"border: 1px solid {BORDER}; border-radius: 10px; }} "
+                f"QFrame#ExportOptionRow:hover {{ background-color: {BG_SURFACE_MUTED}; border-color: #CBD5E1; }}"
+            )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.radio.setChecked(True)
+        super().mousePressEvent(event)
+
+
 class ExportDialog(QDialog):
-    """Export modal dialog with 3 choices (Summary CSV, Selected Cases CSV, HTML Report)."""
+    """Export modal dialog with 3 choices (Summary CSV, Specific/All Cases CSV, HTML Report)."""
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.setObjectName("ExportDialog")
         self.setWindowTitle("Ekspor Hasil Analisis")
-        self.setFixedWidth(480)
-        self.setStyleSheet(f"background-color: {BG_CARD}; color: {TEXT_PRIMARY};")
+        self.setFixedWidth(540)
+        self.setStyleSheet(
+            f"QDialog#ExportDialog {{ background-color: {BG_CARD}; color: {TEXT_PRIMARY}; }}"
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setSpacing(12)
 
         title = QLabel("Pilih Jenis Ekspor")
-        title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {TEXT_PRIMARY};")
+        title.setStyleSheet(
+            f"background: transparent; border: none; font-size: 18px; font-weight: 700; color: {TEXT_PRIMARY};"
+        )
         layout.addWidget(title)
 
-        desc = QLabel("Pilih format berkas yang ingin diekspor dari hasil analisis saat ini:")
-        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
+        desc = QLabel("Pilih format dan cakupan data yang ingin diekspor dari hasil analisis saat ini:")
+        desc.setWordWrap(True)
+        desc.setStyleSheet(
+            f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 13px;"
+        )
         layout.addWidget(desc)
 
         self.btn_group = QButtonGroup(self)
 
         self.r1 = QRadioButton("Ringkasan jawaban latihan (CSV)")
         self.r1.setChecked(True)
-        self.r1.setStyleSheet(f"font-size: 14px; font-weight: 500; padding: 6px;")
         self.btn_group.addButton(self.r1, 1)
-        layout.addWidget(self.r1)
+        self.row_1 = _ExportOptionRow(
+            self.r1,
+            "Satu berkas CSV berisi ringkasan 8 jawaban wajib (11.7 A–E, 11.15, 11.18, 11.22).",
+        )
+        layout.addWidget(self.row_1)
 
-        self.r2 = QRadioButton("Daftar case terpilih per soal (CSV)")
-        self.r2.setStyleSheet(f"font-size: 14px; font-weight: 500; padding: 6px;")
+        self.r2 = QRadioButton("Daftar case dan bukti per soal (CSV)")
         self.btn_group.addButton(self.r2, 2)
-        layout.addWidget(self.r2)
+        self.cmb_case_target = QComboBox()
+        self.cmb_case_target.setCursor(QCursor(Qt.PointingHandCursor))
+        case_targets = [
+            ("Semua soal — paket lengkap 11 berkas (folder)", "all_bundle"),
+            ("Overview — Frekuensi aktivitas (CSV)", "overview_activities"),
+            ("11.7 A & B — Seluruh case dan durasi (CSV)", "11_7_all"),
+            ("11.7 C — Successful cases: O_Accepted (CSV)", "11_7_c"),
+            ("11.7 D — Unsuccessful cases: O_Refused (CSV)", "11_7_d"),
+            ("11.7 E — Canceled cases: Endpoint O_Cancelled (CSV)", "11_7_e"),
+            ("11.15 — Daftar case W_Assess Potential Fraud >= 2x complete (CSV)", "11_15_cases"),
+            ("11.15 — Bukti event W_Assess Potential Fraud (CSV)", "11_15_events"),
+            ("11.18 — Daftar case resource sama >= 2x complete (CSV)", "11_18_cases"),
+            ("11.18 — Bukti event resource sama (CSV)", "11_18_events"),
+            ("11.22 — Daftar case O_Cancelled diikuti O_Accepted (CSV)", "11_22_cases"),
+        ]
+        for label, key in case_targets:
+            self.cmb_case_target.addItem(label, key)
 
-        self.r3 = QRadioButton("Laporan lengkap & analitis (HTML)")
-        self.r3.setStyleSheet(f"font-size: 14px; font-weight: 500; padding: 6px;")
+        self.row_2 = _ExportOptionRow(
+            self.r2,
+            "Pilih satu tabel soal tertentu (CSV) atau paket lengkap seluruh hasil (11 berkas ke folder).",
+            extra_widget=self.cmb_case_target,
+        )
+        layout.addWidget(self.row_2)
+
+        self.r3 = QRadioButton("Laporan lengkap dan analitis (HTML)")
         self.btn_group.addButton(self.r3, 3)
-        layout.addWidget(self.r3)
+        self.row_3 = _ExportOptionRow(
+            self.r3,
+            "Satu berkas HTML mandiri berisi ringkasan jawaban, parameter filter, dan tabel bukti.",
+        )
+        layout.addWidget(self.row_3)
 
         layout.addSpacing(8)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         btn_cancel = QPushButton("Batal")
+        btn_cancel.setCursor(QCursor(Qt.PointingHandCursor))
         btn_cancel.clicked.connect(self.reject)
         btn_row.addWidget(btn_cancel)
 
-        self.btn_save = QPushButton("Simpan...")
+        self.btn_save = QPushButton("Simpan CSV...")
+        self.btn_save.setCursor(QCursor(Qt.PointingHandCursor))
         self.btn_save.setStyleSheet(
-            f"background-color: {YELLOW}; color: {NAVY}; font-weight: 700; border: none;"
+            f"QPushButton {{ background-color: {YELLOW}; color: {NAVY}; font-weight: 700; "
+            f"border: none; border-radius: 8px; padding: 7px 18px; }} "
+            f"QPushButton:hover {{ background-color: #E6B300; }}"
         )
         self.btn_save.clicked.connect(self.accept)
         btn_row.addWidget(self.btn_save)
         layout.addLayout(btn_row)
 
+        # Connect signals after populating combobox so initial setup keeps Option 1 selected
+        self.cmb_case_target.activated.connect(lambda _: self.r2.setChecked(True))
+        self.cmb_case_target.currentIndexChanged.connect(self._on_case_target_changed)
+        self.btn_group.idToggled.connect(lambda _id, _chk: self._sync_selection_ui())
+        self._sync_selection_ui()
+
+    def _on_case_target_changed(self, _index: int) -> None:
+        self.r2.setChecked(True)
+        self._sync_selection_ui()
+
+    def _sync_selection_ui(self) -> None:
+        choice = self.get_selected_option()
+        self.row_1.set_selected(choice == 1)
+        self.row_2.set_selected(choice == 2)
+        self.row_3.set_selected(choice == 3)
+
+        if choice == 1:
+            self.btn_save.setText("Simpan CSV...")
+        elif choice == 2:
+            if self.get_selected_case_target() == "all_bundle":
+                self.btn_save.setText("Pilih Folder...")
+            else:
+                self.btn_save.setText("Simpan CSV...")
+        elif choice == 3:
+            self.btn_save.setText("Simpan HTML...")
+
     def get_selected_option(self) -> int:
         return self.btn_group.checkedId()
+
+    def get_selected_case_target(self) -> str:
+        return str(self.cmb_case_target.currentData() or "all_bundle")
 
 
 # ======================================================================
@@ -2754,8 +2909,24 @@ class MainWindow(QMainWindow):
             return b.ex1122.case_summary_df
         return None
 
+    def _mark_exported(self) -> None:
+        self.has_exported = True
+        if self.bundle is not None:
+            is_bpic = not ("synthetic" in self.bundle.report.file_name.lower())
+            self.seen_bpic17 = self.seen_bpic17 or is_bpic
+            self.seen_synthetic = self.seen_synthetic or (not is_bpic)
+        self.drawer.update_states(
+            has_data=True,
+            has_analysis=True,
+            is_bpic17=self.seen_bpic17,
+            is_synthetic=self.seen_synthetic,
+            exported=True,
+        )
+        self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
+
     def _export_table_csv(self, table_view: QTableView, label: str) -> None:
         if not self.bundle:
+            QMessageBox.warning(self, "Belum Ada Hasil", "Silakan muat berkas XES terlebih dahulu.")
             return
         safe_lbl = label.replace(" ", "_").replace(".", "_")
         path, _ = QFileDialog.getSaveFileName(
@@ -2772,16 +2943,7 @@ class MainWindow(QMainWindow):
                 if isinstance(model, Simple3ColTableModel):
                     df = pd.DataFrame(model._rows, columns=model._headers)
                     df.to_csv(path, index=False, encoding="utf-8-sig")
-            self.has_exported = True
-            is_bpic = not ("synthetic" in self.bundle.report.file_name.lower())
-            self.drawer.update_states(
-                has_data=True,
-                has_analysis=True,
-                is_bpic17=self.seen_bpic17 or is_bpic,
-                is_synthetic=self.seen_synthetic or (not is_bpic),
-                exported=True,
-            )
-            self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
+            self._mark_exported()
             QMessageBox.information(self, "Ekspor Berhasil", f"Tabel soal {label} disimpan ke:\n{path}")
         except Exception as exc:
             QMessageBox.critical(self, "Ekspor Gagal", str(exc))
@@ -3391,66 +3553,61 @@ class MainWindow(QMainWindow):
         choice = dlg.get_selected_option()
         b = self.bundle
 
-        if choice == 1:
-            # Ringkasan jawaban CSV
-            path, _ = QFileDialog.getSaveFileName(
-                self, "Simpan Ringkasan Jawaban CSV", "ringkasan_jawaban_bpic17.csv", "CSV Files (*.csv)"
-            )
-            if path:
-                sum_df = build_summary_dataframe(
-                    b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+        try:
+            if choice == 1:
+                # Ringkasan jawaban CSV
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Simpan Ringkasan Jawaban CSV", "ringkasan_jawaban_bpic17.csv", "CSV Files (*.csv)"
                 )
-                sum_df.to_csv(path, index=False, encoding="utf-8-sig")
-                self.has_exported = True
-                self.drawer.update_states(
-                    has_data=True,
-                    has_analysis=True,
-                    is_bpic17=self.seen_bpic17,
-                    is_synthetic=self.seen_synthetic,
-                    exported=True,
-                )
-                self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
-                QMessageBox.information(self, "Ekspor Berhasil", f"Ringkasan jawaban disimpan ke:\n{path}")
+                if path:
+                    sum_df = build_summary_dataframe(
+                        b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+                    )
+                    sum_df.to_csv(path, index=False, encoding="utf-8-sig")
+                    self._mark_exported()
+                    QMessageBox.information(self, "Ekspor Berhasil", f"Ringkasan jawaban disimpan ke:\n{path}")
 
-        elif choice == 2:
-            # Daftar case terpilih CSV (folder)
-            out_dir = QFileDialog.getExistingDirectory(self, "Pilih Folder Tujuan Ekspor Case Terpilih")
-            if out_dir:
-                export_all_to_directory(
-                    out_dir, b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
-                )
-                self.has_exported = True
-                self.drawer.update_states(
-                    has_data=True,
-                    has_analysis=True,
-                    is_bpic17=self.seen_bpic17,
-                    is_synthetic=self.seen_synthetic,
-                    exported=True,
-                )
-                self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
-                QMessageBox.information(self, "Ekspor Berhasil", f"Daftar case disimpan ke folder:\n{out_dir}")
+            elif choice == 2:
+                target_key = dlg.get_selected_case_target()
+                if target_key == "all_bundle":
+                    out_dir = QFileDialog.getExistingDirectory(self, "Pilih Folder Tujuan Ekspor Paket Lengkap")
+                    if out_dir:
+                        exported = export_all_to_directory(
+                            out_dir, b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+                        )
+                        self._mark_exported()
+                        QMessageBox.information(
+                            self,
+                            "Ekspor Berhasil",
+                            f"{len(exported)} berkas hasil analisis disimpan ke folder:\n{out_dir}",
+                        )
+                else:
+                    df, default_name, title = get_export_target_dataframe(
+                        target_key, b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+                    )
+                    path, _ = QFileDialog.getSaveFileName(
+                        self, f"Simpan {title}", default_name, "CSV Files (*.csv)"
+                    )
+                    if path:
+                        df.to_csv(path, index=False, encoding="utf-8-sig")
+                        self._mark_exported()
+                        QMessageBox.information(self, "Ekspor Berhasil", f"{title} disimpan ke:\n{path}")
 
-        elif choice == 3:
-            # HTML Report
-            path, _ = QFileDialog.getSaveFileName(
-                self, "Simpan Laporan HTML", "laporan_analisis_bpic17.html", "HTML Files (*.html)"
-            )
-            if path:
-                sum_df = build_summary_dataframe(
-                    b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+            elif choice == 3:
+                # HTML Report
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Simpan Laporan HTML", "laporan_analisis_bpic17.html", "HTML Files (*.html)"
                 )
-                html_txt = generate_html_report(
-                    b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122, sum_df
-                )
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(html_txt)
-                self.has_exported = True
-                self.drawer.update_states(
-                    has_data=True,
-                    has_analysis=True,
-                    is_bpic17=self.seen_bpic17,
-                    is_synthetic=self.seen_synthetic,
-                    exported=True,
-                )
-                self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
-                QMessageBox.information(self, "Ekspor Berhasil", f"Laporan HTML disimpan ke:\n{path}")
+                if path:
+                    sum_df = build_summary_dataframe(
+                        b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
+                    )
+                    html_txt = generate_html_report(
+                        b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122, sum_df
+                    )
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(html_txt)
+                    self._mark_exported()
+                    QMessageBox.information(self, "Ekspor Berhasil", f"Laporan HTML disimpan ke:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Ekspor Gagal", str(exc))

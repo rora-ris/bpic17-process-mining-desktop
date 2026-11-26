@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pandas as pd
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from src.analyzer import (
@@ -20,11 +21,12 @@ from src.analyzer import (
     analyze_overview,
 )
 from src.core import load_and_validate_xes
-from src.exporter import export_all_to_directory
+from src.exporter import export_all_to_directory, get_export_target_dataframe
 from src.gui import (
     AboutDialog,
     ActivityListDialog,
     CaseDurationDialog,
+    ExportDialog,
     FastSlowDialog,
     FullAnalysisBundle,
     MainWindow,
@@ -244,3 +246,86 @@ def test_gui_mainwindow_integration_and_export(tmp_path):
             assert os.path.exists(fp)
     finally:
         win.close()
+
+
+def test_export_dialog_options_and_target_lookup(tmp_path):
+    """Verifies ExportDialog option switching, target selection, and single-target CSV lookup."""
+    app = QApplication.instance() or QApplication(sys.argv)
+    dlg = ExportDialog()
+    try:
+        # Default selection is Option 1
+        assert dlg.get_selected_option() == 1
+        assert dlg.btn_save.text() == "Simpan CSV..."
+        assert "&" not in dlg.r3.text()
+
+        # Clicking option 2 row switches to Option 2 (bundle folder by default)
+        QTest.mouseClick(dlg.row_2, Qt.LeftButton)
+        app.processEvents()
+        assert dlg.get_selected_option() == 2
+        assert dlg.get_selected_case_target() == "all_bundle"
+        assert dlg.btn_save.text() == "Pilih Folder..."
+
+        # Selecting a specific CSV target updates button label to Simpan CSV...
+        idx_1118 = dlg.cmb_case_target.findData("11_18_cases")
+        assert idx_1118 > 0
+        dlg.cmb_case_target.setCurrentIndex(idx_1118)
+        app.processEvents()
+        assert dlg.get_selected_case_target() == "11_18_cases"
+        assert dlg.btn_save.text() == "Simpan CSV..."
+
+        # Switching back to Option 1, then changing combobox auto-selects Option 2
+        QTest.mouseClick(dlg.row_1, Qt.LeftButton)
+        app.processEvents()
+        assert dlg.get_selected_option() == 1
+        assert dlg.btn_save.text() == "Simpan CSV..."
+
+        idx_1122 = dlg.cmb_case_target.findData("11_22_cases")
+        assert idx_1122 > 0
+        dlg.cmb_case_target.setCurrentIndex(idx_1122)
+        app.processEvents()
+        assert dlg.get_selected_option() == 2
+        assert dlg.get_selected_case_target() == "11_22_cases"
+
+        # Clicking option 3 row switches to Option 3 (HTML)
+        QTest.mouseClick(dlg.row_3, Qt.LeftButton)
+        app.processEvents()
+        assert dlg.get_selected_option() == 3
+        assert dlg.btn_save.text() == "Simpan HTML..."
+    finally:
+        dlg.close()
+
+    # Single-target CSV lookup verification across all 11 supported keys
+    xes_path = str(tmp_path / "synthetic_export_targets.xes")
+    generate_synthetic_xes_file(xes_path)
+    ctx, rep = load_and_validate_xes(xes_path)
+    assert rep.is_valid and ctx is not None
+
+    ov = analyze_overview(ctx)
+    r117 = analyze_exercise_11_7(ctx)
+    r1115 = analyze_exercise_11_15(ctx)
+    r1118 = analyze_exercise_11_18(ctx, res_1115=r1115)
+    r1122 = analyze_exercise_11_22(ctx)
+
+    expected_keys = [
+        "summary",
+        "overview_activities",
+        "11_7_all",
+        "11_7_c",
+        "11_7_d",
+        "11_7_e",
+        "11_15_cases",
+        "11_15_events",
+        "11_18_cases",
+        "11_18_events",
+        "11_22_cases",
+    ]
+    for key in expected_keys:
+        df, default_name, title = get_export_target_dataframe(
+            key, ctx, ov, r117, r1115, r1118, r1122
+        )
+        assert isinstance(df, pd.DataFrame)
+        assert default_name.endswith(".csv")
+        assert len(title) > 0
+
+    with pytest.raises(ValueError):
+        get_export_target_dataframe("unknown_key", ctx, ov, r117, r1115, r1118, r1122)
