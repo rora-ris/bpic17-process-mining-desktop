@@ -1,28 +1,28 @@
-﻿lifecycle:transition,case:ApplicationType,CreditScore,org:resource,case:LoanGoal,MonthlyCost,case:concept:name,concept:name,time:timestamp,NumberOfTerms,EventOrigin,Selected,EventID,Action,OfferID,OfferedAmount,case:RequestedAmount,Accepted,FirstWithdrawalAmount,_event_idx,_trace_pos
-complete,New credit,,User_99,Home improvement,,Application_612471425,W_Assess potential fraud,2016-03-07 15:19:56.219+00:00,,Workflow,,Workitem_1719447077,Deleted,,,50538.0,,,144986,29
-complete,New credit,,User_144,Home improvement,,Application_612471425,W_Assess potential fraud,2016-03-09 08:37:17.801+00:00,,Workflow,,Workitem_1795662103,Deleted,,,50538.0,,,145004,47
-complete,New credit,,User_144,Car,,Application_900460993,W_Assess potential fraud,2016-03-22 08:45:48.669+00:00,,Workflow,,Workitem_1158239678,Deleted,,,50000.0,,,212462,40
-complete,New credit,,User_138,Car,,Application_900460993,W_Assess potential fraud,2016-03-22 09:32:01.256+00:00,,Workflow,,Workitem_1549690509,Deleted,,,50000.0,,,212471,49
-complete,New credit,,User_75,Existing loan takeover,,Application_534041276,W_Assess potential fraud,2016-05-12 12:55:29.912+00:00,,Workflow,,Workitem_1128572837,Deleted,,,20000.0,,,351948,34
-complete,New credit,,User_138,Existing loan takeover,,Application_534041276,W_Assess potential fraud,2016-05-13 07:07:52.977+00:00,,Workflow,,Workitem_361717028,Deleted,,,20000.0,,,351953,39
-complete,New credit,,User_83,Not speficied,,Application_412627378,W_Assess potential fraud,2016-05-19 10:43:23.843+00:00,,Workflow,,Workitem_1232364136,Deleted,,,8000.0,,,380931,38
-complete,New credit,,User_144,Not speficied,,Application_412627378,W_Assess potential fraud,2016-05-19 12:42:00.234+00:00,,Workflow,,Workitem_1595581812,Deleted,,,8000.0,,,380937,44
-complete,New credit,,User_144,Car,,Application_1221917431,W_Assess potential fraud,2016-07-05 11:36:11.613+00:00,,Workflow,,Workitem_454709354,Deleted,,,8000.0,,,444677,60
-complete,New credit,,User_144,Car,,Application_1221917431,W_Assess potential fraud,2016-07-06 09:35:58.622+00:00,,Workflow,,Workitem_1308810967,Deleted,,,8000.0,,,444691,74
-complete,New credit,,User_99,Car,,Application_1021748617,W_Assess potential fraud,2016-06-20 13:31:57.643+00:00,,Workflow,,Workitem_1258341708,Deleted,,,30000.0,,,463741,30
-complete,New credit,,User_138,Car,,Application_1021748617,W_Assess potential fraud,2016-06-21 08:54:00.134+00:00,,Workflow,,Workitem_818633411,Deleted,,,30000.0,,,463750,39
-complete,New credit,,User_143,Not speficied,,Application_473455481,W_Assess potential fraud,2016-08-18 07:12:22.725+00:00,,Workflow,,Workitem_587026412,Deleted,,,5000.0,,,584764,62
-complete,New credit,,User_143,Not speficied,,Application_473455481,W_Assess potential fraud,2016-08-25 11:03:54.059+00:00,,Workflow,,Workitem_419868375,Deleted,,,5000.0,,,584780,78
-complete,New credit,,User_90,"Other, see explanation",,Application_1292983087,W_Assess potential fraud,2016-08-11 08:05:51.911+00:00,,Workflow,,Workitem_1026627406,Deleted,,,5000.0,,,658062,30
-complete,New credit,,User_143,"Other, see explanation",,Application_1292983087,W_Assess potential fraud,2016-08-15 11:50:39.782+00:00,,Workflow,,Workitem_632307870,Deleted,,,5000.0,,,658067,35
-complete,New credit,,User_138,"Other, see explanation",,Application_1292983087,W_Assess potential fraud,2016-10-07 07:04:40.985+00:00,,Workflow,,Workitem_836085594,Deleted,,,5000.0,,,658118,86
-complete,New credit,,User_93,"Other, see explanation",,Application_438711887,W_Assess potential fraud,2016-10-18 15:45:28.901+00:00,,Workflow,,Workitem_890958098,Deleted,,,5250.0,,,908612,68
-complete,New credit,,User_138,"Other, see explanation",,Application_438711887,W_Assess potential fraud,2016-10-20 06:50:21.052+00:00,,Workflow,,Workitem_2062875002,Deleted,,,5250.0,,,908629,85
-complete,New credit,,User_143,Home improvement,,Application_1405826636,W_Assess potential fraud,2016-11-21 16:02:30.874+00:00,,Workflow,,Workitem_379454948,Deleted,,,16000.0,,,1044802,30
-complete,New credit,,User_143,Home improvement,,Application_1405826636,W_Assess potential fraud,2016-11-22 08:17:07.392+00:00,,Workflow,,Workitem_865385655,Deleted,,,16000.0,,,1044817,45
-complete,New credit,,User_83,Car,,Application_287618269,W_Assess potential fraud,2016-12-01 10:12:01.423+00:00,,Workflow,,Workitem_444440661,Deleted,,,25000.0,,,1064358,43
-complete,New credit,,User_138,Car,,Application_287618269,W_Assess potential fraud,2016-12-12 14:29:46.122+00:00,,Workflow,,Workitem_1330491054,Deleted,,,25000.0,,,1064377,62
-complete,New credit,,User_138,Home improvement,,Application_1114361455,W_Assess potential fraud,2016-12-02 09:15:56.833+00:00,,Workflow,,Workitem_1276136514,Deleted,,,15000.0,,,1114797,12
-complete,New credit,,User_143,Home improvement,,Application_1114361455,W_Assess potential fraud,2016-12-15 07:58:01.236+00:00,,Workflow,,Workitem_139552671,Deleted,,,15000.0,,,1114833,48
-complete,New credit,,User_75,Home improvement,,Application_1568546217,W_Assess potential fraud,2017-01-10 11:24:20.770+00:00,,Workflow,,Workitem_1475445788,Deleted,,,40000.0,,,1191421,55
-complete,New credit,,User_138,Home improvement,,Application_1568546217,W_Assess potential fraud,2017-01-12 09:43:29.735+00:00,,Workflow,,Workitem_632150678,Deleted,,,40000.0,,,1191434,68
+﻿OfferID,lifecycle:transition,FirstWithdrawalAmount,Selected,EventID,NumberOfTerms,CreditScore,org:resource,MonthlyCost,time:timestamp,OfferedAmount,concept:name,Accepted,EventOrigin,case:LoanGoal,case:ApplicationType,Action,case:concept:name,case:RequestedAmount,_event_idx,_trace_pos
+,complete,,,Workitem_1719447077,,,User_99,,2016-03-07 15:19:56.219+00:00,,W_Assess potential fraud,,Workflow,Home improvement,New credit,Deleted,Application_612471425,50538.0,144986,29
+,complete,,,Workitem_1795662103,,,User_144,,2016-03-09 08:37:17.801+00:00,,W_Assess potential fraud,,Workflow,Home improvement,New credit,Deleted,Application_612471425,50538.0,145004,47
+,complete,,,Workitem_1158239678,,,User_144,,2016-03-22 08:45:48.669+00:00,,W_Assess potential fraud,,Workflow,Car,New credit,Deleted,Application_900460993,50000.0,212462,40
+,complete,,,Workitem_1549690509,,,User_138,,2016-03-22 09:32:01.256+00:00,,W_Assess potential fraud,,Workflow,Car,New credit,Deleted,Application_900460993,50000.0,212471,49
+,complete,,,Workitem_1128572837,,,User_75,,2016-05-12 12:55:29.912+00:00,,W_Assess potential fraud,,Workflow,Existing loan takeover,New credit,Deleted,Application_534041276,20000.0,351948,34
+,complete,,,Workitem_361717028,,,User_138,,2016-05-13 07:07:52.977+00:00,,W_Assess potential fraud,,Workflow,Existing loan takeover,New credit,Deleted,Application_534041276,20000.0,351953,39
+,complete,,,Workitem_1232364136,,,User_83,,2016-05-19 10:43:23.843+00:00,,W_Assess potential fraud,,Workflow,Not speficied,New credit,Deleted,Application_412627378,8000.0,380931,38
+,complete,,,Workitem_1595581812,,,User_144,,2016-05-19 12:42:00.234+00:00,,W_Assess potential fraud,,Workflow,Not speficied,New credit,Deleted,Application_412627378,8000.0,380937,44
+,complete,,,Workitem_454709354,,,User_144,,2016-07-05 11:36:11.613+00:00,,W_Assess potential fraud,,Workflow,Car,New credit,Deleted,Application_1221917431,8000.0,444677,60
+,complete,,,Workitem_1308810967,,,User_144,,2016-07-06 09:35:58.622+00:00,,W_Assess potential fraud,,Workflow,Car,New credit,Deleted,Application_1221917431,8000.0,444691,74
+,complete,,,Workitem_1258341708,,,User_99,,2016-06-20 13:31:57.643+00:00,,W_Assess potential fraud,,Workflow,Car,New credit,Deleted,Application_1021748617,30000.0,463741,30
+,complete,,,Workitem_818633411,,,User_138,,2016-06-21 08:54:00.134+00:00,,W_Assess potential fraud,,Workflow,Car,New credit,Deleted,Application_1021748617,30000.0,463750,39
+,complete,,,Workitem_587026412,,,User_143,,2016-08-18 07:12:22.725+00:00,,W_Assess potential fraud,,Workflow,Not speficied,New credit,Deleted,Application_473455481,5000.0,584764,62
+,complete,,,Workitem_419868375,,,User_143,,2016-08-25 11:03:54.059+00:00,,W_Assess potential fraud,,Workflow,Not speficied,New credit,Deleted,Application_473455481,5000.0,584780,78
+,complete,,,Workitem_1026627406,,,User_90,,2016-08-11 08:05:51.911+00:00,,W_Assess potential fraud,,Workflow,"Other, see explanation",New credit,Deleted,Application_1292983087,5000.0,658062,30
+,complete,,,Workitem_632307870,,,User_143,,2016-08-15 11:50:39.782+00:00,,W_Assess potential fraud,,Workflow,"Other, see explanation",New credit,Deleted,Application_1292983087,5000.0,658067,35
+,complete,,,Workitem_836085594,,,User_138,,2016-10-07 07:04:40.985+00:00,,W_Assess potential fraud,,Workflow,"Other, see explanation",New credit,Deleted,Application_1292983087,5000.0,658118,86
+,complete,,,Workitem_890958098,,,User_93,,2016-10-18 15:45:28.901+00:00,,W_Assess potential fraud,,Workflow,"Other, see explanation",New credit,Deleted,Application_438711887,5250.0,908612,68
+,complete,,,Workitem_2062875002,,,User_138,,2016-10-20 06:50:21.052+00:00,,W_Assess potential fraud,,Workflow,"Other, see explanation",New credit,Deleted,Application_438711887,5250.0,908629,85
+,complete,,,Workitem_379454948,,,User_143,,2016-11-21 16:02:30.874+00:00,,W_Assess potential fraud,,Workflow,Home improvement,New credit,Deleted,Application_1405826636,16000.0,1044802,30
+,complete,,,Workitem_865385655,,,User_143,,2016-11-22 08:17:07.392+00:00,,W_Assess potential fraud,,Workflow,Home improvement,New credit,Deleted,Application_1405826636,16000.0,1044817,45
+,complete,,,Workitem_444440661,,,User_83,,2016-12-01 10:12:01.423+00:00,,W_Assess potential fraud,,Workflow,Car,New credit,Deleted,Application_287618269,25000.0,1064358,43
+,complete,,,Workitem_1330491054,,,User_138,,2016-12-12 14:29:46.122+00:00,,W_Assess potential fraud,,Workflow,Car,New credit,Deleted,Application_287618269,25000.0,1064377,62
+,complete,,,Workitem_1276136514,,,User_138,,2016-12-02 09:15:56.833+00:00,,W_Assess potential fraud,,Workflow,Home improvement,New credit,Deleted,Application_1114361455,15000.0,1114797,12
+,complete,,,Workitem_139552671,,,User_143,,2016-12-15 07:58:01.236+00:00,,W_Assess potential fraud,,Workflow,Home improvement,New credit,Deleted,Application_1114361455,15000.0,1114833,48
+,complete,,,Workitem_1475445788,,,User_75,,2017-01-10 11:24:20.770+00:00,,W_Assess potential fraud,,Workflow,Home improvement,New credit,Deleted,Application_1568546217,40000.0,1191421,55
+,complete,,,Workitem_632150678,,,User_138,,2017-01-12 09:43:29.735+00:00,,W_Assess potential fraud,,Workflow,Home improvement,New credit,Deleted,Application_1568546217,40000.0,1191434,68

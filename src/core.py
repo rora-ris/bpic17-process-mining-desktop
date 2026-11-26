@@ -26,12 +26,14 @@ def _pkg_version(pkg_name: str, module_name: Optional[str] = None, fallback: str
         return fallback
 
 
-def _ensure_stripped_str(s: pd.Series) -> pd.Series:
+def _ensure_stripped_str(s: pd.Series, uniq: Optional[np.ndarray] = None) -> pd.Series:
     """Returns stripped string Series, avoiding full-column copy if already clean strings."""
-    uniq = s.unique()
+    if uniq is None:
+        uniq = s.unique()
     if all(type(v) is str and v == v.strip() for v in uniq):
         return s
     return s.map({v: str(v).strip() for v in uniq})
+
 
 REQUIRED_COLUMNS = ["case:concept:name", "concept:name", "time:timestamp"]
 OPTIONAL_KEY_COLUMNS = ["lifecycle:transition", "org:resource", "OfferID", "EventID", "EventOrigin", "Action"]
@@ -83,58 +85,120 @@ class ValidationReport:
 class EventLogContext:
     """Holds the active PM4Py event log DataFrame and precomputed case-level metadata."""
 
-    def __init__(self, df: pd.DataFrame, report: ValidationReport):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        report: ValidationReport,
+        *,
+        case_codes: Optional[np.ndarray] = None,
+        case_uniques: Optional[pd.Index] = None,
+        starts: Optional[np.ndarray] = None,
+        ends: Optional[np.ndarray] = None,
+        counts: Optional[np.ndarray] = None,
+        has_non_chrono: bool = False,
+    ):
         self.df = df
         self.report = report
         self._case_indices: Optional[Dict[str, np.ndarray]] = None
+        self._case_slices: Optional[Dict[str, Tuple[int, int]]] = None
+
+        if starts is not None and ends is not None and case_uniques is not None:
+            self._case_slices = {
+                str(cid): (int(s), int(e))
+                for cid, s, e in zip(case_uniques, starts, ends)
+            }
 
         # Precompute case-level summary table (preserving trace context)
-        self.case_summary_df = self._build_case_summary(df)
-        self.activity_freq_df = self._build_activity_frequency(df)
+        self.case_summary_df = self._build_case_summary(
+            df,
+            case_uniques=case_uniques,
+            starts=starts,
+            ends=ends,
+            counts=counts,
+            has_non_chrono=has_non_chrono,
+        )
+        self.activity_freq_df = self._build_activity_frequency(
+            df,
+            has_lifecycle=report.has_lifecycle,
+            case_codes=case_codes,
+        )
 
     @staticmethod
-    def _build_case_summary(df: pd.DataFrame) -> pd.DataFrame:
+    def _build_case_summary(
+        df: pd.DataFrame,
+        *,
+        case_uniques: Optional[pd.Index] = None,
+        starts: Optional[np.ndarray] = None,
+        ends: Optional[np.ndarray] = None,
+        counts: Optional[np.ndarray] = None,
+        has_non_chrono: bool = False,
+    ) -> pd.DataFrame:
         """Computes case-level timestamps, event counts, start/end activities, and cycle times.
-        
+
         Follows Section 4 & 7.1:
         - Cycle time = timestamp of last event minus timestamp of first event in the trace.
-        - Also computes (max - min) duration to ensure full consistency.
+        - Also computes (max - min) duration to ensure full consistency (and handles non-chronological traces).
         - Never removes events before computing case duration.
         """
         case_col = "case:concept:name"
         act_col = "concept:name"
         ts_col = "time:timestamp"
 
-        grp = df.groupby(case_col, sort=False)
+        if starts is not None and ends is not None and counts is not None and case_uniques is not None:
+            # Contiguous-trace O(N) fast path
+            last_idx = ends - 1
+            first_ts = df[ts_col].iloc[starts].reset_index(drop=True)
+            last_ts = df[ts_col].iloc[last_idx].reset_index(drop=True)
+            first_act_arr = df[act_col].iloc[starts].to_numpy()
+            last_act_arr = df[act_col].iloc[last_idx].to_numpy()
+            case_ids = case_uniques.astype(str)
+            ev_counts_arr = counts
 
-        first_ts = grp[ts_col].first()
-        last_ts = grp[ts_col].last()
-        min_ts = grp[ts_col].min()
-        max_ts = grp[ts_col].max()
-        event_count = grp.size()
-        first_act = grp[act_col].first()
-        last_act = grp[act_col].last()
+            raw_duration_sec = (last_ts - first_ts).dt.total_seconds().fillna(0.0).to_numpy()
+            if has_non_chrono:
+                grp_ts = df.groupby(case_col, sort=False)[ts_col]
+                min_ts = grp_ts.min().reset_index(drop=True)
+                max_ts = grp_ts.max().reset_index(drop=True)
+                minmax_sec = (max_ts - min_ts).dt.total_seconds().fillna(0.0).to_numpy()
+            else:
+                minmax_sec = raw_duration_sec
 
-        # Cycle time calculation:
-        # For chronological traces, (last_ts - first_ts) is equal to (max_ts - min_ts).
-        # For traces with non-chronological events (e.g., last_ts < first_ts),
-        # minmax_sec guarantees non-negative, accurate span of the case.
-        raw_duration_sec = (last_ts - first_ts).dt.total_seconds().fillna(0.0).to_numpy()
-        minmax_sec = (max_ts - min_ts).dt.total_seconds().fillna(0.0).to_numpy()
+            start_ts_arr = first_ts.array
+            end_ts_arr = last_ts.array
+        else:
+            # General fallback for interleaved/non-contiguous traces
+            grp = df.groupby(case_col, sort=False)
+
+            first_ts = grp[ts_col].first()
+            last_ts = grp[ts_col].last()
+            min_ts = grp[ts_col].min()
+            max_ts = grp[ts_col].max()
+            event_count = grp.size()
+            first_act = grp[act_col].first()
+            last_act = grp[act_col].last()
+
+            case_ids = first_ts.index.astype(str)
+            ev_counts_arr = event_count.to_numpy()
+            first_act_arr = first_act.to_numpy()
+            last_act_arr = last_act.to_numpy()
+            start_ts_arr = first_ts.array
+            end_ts_arr = last_ts.array
+
+            raw_duration_sec = (last_ts - first_ts).dt.total_seconds().fillna(0.0).to_numpy()
+            minmax_sec = (max_ts - min_ts).dt.total_seconds().fillna(0.0).to_numpy()
 
         duration_sec = np.where(raw_duration_sec < 0, minmax_sec, raw_duration_sec)
         duration_days = duration_sec / 86400.0
         duration_hours = duration_sec / 3600.0
-
         minmax_days = minmax_sec / 86400.0
 
         summary = pd.DataFrame({
-            "case_id": first_ts.index.astype(str),
-            "event_count": event_count.to_numpy(),
-            "start_timestamp": first_ts.array,
-            "end_timestamp": last_ts.array,
-            "first_activity": first_act.to_numpy(),
-            "last_activity": last_act.to_numpy(),
+            "case_id": case_ids,
+            "event_count": ev_counts_arr,
+            "start_timestamp": start_ts_arr,
+            "end_timestamp": end_ts_arr,
+            "first_activity": first_act_arr,
+            "last_activity": last_act_arr,
             "duration_seconds": duration_sec,
             "duration_hours": duration_hours,
             "duration_days": duration_days,
@@ -149,21 +213,30 @@ class EventLogContext:
         return summary
 
     @staticmethod
-    def _build_activity_frequency(df: pd.DataFrame) -> pd.DataFrame:
+    def _build_activity_frequency(
+        df: pd.DataFrame,
+        *,
+        has_lifecycle: Optional[bool] = None,
+        case_codes: Optional[np.ndarray] = None,
+    ) -> pd.DataFrame:
         """Computes activity frequency at both event level and unique case level."""
         case_col = "case:concept:name"
         act_col = "concept:name"
-        total_cases = df[case_col].nunique()
+        total_cases = int(case_codes.max() + 1) if (case_codes is not None and len(case_codes) > 0) else int(df[case_col].nunique())
         total_events = len(df)
 
         event_counts = df[act_col].value_counts()
-        case_counts = df.groupby(act_col, sort=False)[case_col].nunique()
+        if case_codes is not None:
+            case_counts = pd.Series(case_codes).groupby(df[act_col].to_numpy(), sort=False).nunique()
+        else:
+            case_counts = df.groupby(act_col, sort=False)[case_col].nunique()
 
-        has_lc = "lifecycle:transition" in df.columns
-        if has_lc:
+        lc_col_present = "lifecycle:transition" in df.columns
+        use_lc = lc_col_present if has_lifecycle is None else (has_lifecycle and lc_col_present)
+        if use_lc:
             comp_vals = [
                 v for v in df["lifecycle:transition"].dropna().unique()
-                if str(v).lower() == "complete"
+                if str(v).strip().lower() == "complete"
             ]
             comp_df = df[df["lifecycle:transition"].isin(comp_vals)]
             comp_event_counts = comp_df[act_col].value_counts()
@@ -186,12 +259,19 @@ class EventLogContext:
 
     def get_case_events(self, case_id: str) -> pd.DataFrame:
         """Returns all events belonging to a specific case ID in exact trace order."""
+        cid_str = str(case_id)
+        if self._case_slices is not None:
+            sl = self._case_slices.get(cid_str)
+            if sl is None:
+                return self.df.iloc[0:0].copy()
+            return self.df.iloc[sl[0]:sl[1]].copy()
+
         if self._case_indices is None:
             self._case_indices = {
                 str(k): idx
                 for k, idx in self.df.groupby("case:concept:name", sort=False).indices.items()
             }
-        idx = self._case_indices.get(str(case_id))
+        idx = self._case_indices.get(cid_str)
         if idx is None or len(idx) == 0:
             return self.df.iloc[0:0].copy()
         sub = self.df.iloc[idx].copy()
@@ -325,6 +405,7 @@ def load_and_validate_xes(
         return None, report
 
     # Validate that mandatory columns have no empty / NaN / placeholder values
+    cached_uniqs: Dict[str, np.ndarray] = {}
     for req_col in REQUIRED_COLUMNS:
         col_series = df[req_col]
         if pd.api.types.is_datetime64_any_dtype(col_series):
@@ -332,8 +413,10 @@ def load_and_validate_xes(
         else:
             na_mask = col_series.isna()
             non_na = col_series[~na_mask]
+            uniq = non_na.unique()
+            cached_uniqs[req_col] = uniq
             bad_vals = {
-                v for v in non_na.unique()
+                v for v in uniq
                 if str(v).strip().lower() in {"", "nan", "none", "null"}
             }
             invalid_count = (
@@ -369,7 +452,7 @@ def load_and_validate_xes(
         if pd.api.types.is_datetime64_any_dtype(ts_series):
             if ts_series.dt.tz is None:
                 df["time:timestamp"] = ts_series.dt.tz_localize("UTC")
-            else:
+            elif str(ts_series.dt.tz) != "UTC":
                 df["time:timestamp"] = ts_series.dt.tz_convert("UTC")
         else:
             df["time:timestamp"] = pd.to_datetime(ts_series, utc=True, errors="coerce")
@@ -418,22 +501,50 @@ def load_and_validate_xes(
         return None, report
 
     # Normalize types and preserve original XML sequence order
-    df["case:concept:name"] = _ensure_stripped_str(df["case:concept:name"])
-    df["concept:name"] = _ensure_stripped_str(df["concept:name"])
+    df["case:concept:name"] = _ensure_stripped_str(df["case:concept:name"], cached_uniqs.get("case:concept:name"))
+    df["concept:name"] = _ensure_stripped_str(df["concept:name"], cached_uniqs.get("concept:name"))
     df["_event_idx"] = np.arange(len(df))
-    df["_trace_pos"] = df.groupby("case:concept:name", sort=False).cumcount() + 1
+
+    case_codes, case_uniques = pd.factorize(df["case:concept:name"], sort=False)
+    is_contiguous = len(case_codes) <= 1 or bool((np.diff(case_codes) >= 0).all())
 
     warnings: List[str] = []
+    starts: Optional[np.ndarray] = None
+    ends: Optional[np.ndarray] = None
+    counts: Optional[np.ndarray] = None
+    has_non_chrono = False
 
-    # Detect non-chronological events within traces
-    ts_diffs = df.groupby("case:concept:name", sort=False)["time:timestamp"].diff()
-    non_chrono_mask = ts_diffs.dt.total_seconds() < 0
-    if non_chrono_mask.any():
-        non_chrono_cases = int(df.loc[non_chrono_mask, "case:concept:name"].nunique())
-        warnings.append(
-            f"Ditemukan {non_chrono_cases} trace dengan urutan event yang tidak berurutan secara kronologis "
-            f"(timestamp mundur); durasi per case diamankan menggunakan rentang (max - min) timestamp."
-        )
+    if is_contiguous:
+        change_idx = np.flatnonzero(np.diff(case_codes)) + 1 if len(case_codes) > 1 else np.empty(0, dtype=np.int64)
+        starts = np.concatenate(([0], change_idx))
+        ends = np.concatenate((change_idx, [len(df)]))
+        counts = ends - starts
+        df["_trace_pos"] = np.arange(len(df), dtype=np.int64) - np.repeat(starts, counts) + 1
+
+        # Unit-safe, order-preserving epoch integer ticks (works identically for us and ns)
+        ts_arr = df["time:timestamp"].array
+        ts_ticks = ts_arr.asi8 if hasattr(ts_arr, "asi8") else df["time:timestamp"].astype("int64").to_numpy()
+        if len(ts_ticks) > 1:
+            same_case = case_codes[1:] == case_codes[:-1]
+            backwards = same_case & (ts_ticks[1:] < ts_ticks[:-1])
+            if backwards.any():
+                has_non_chrono = True
+                non_chrono_cases = int(len(np.unique(case_codes[1:][backwards])))
+                warnings.append(
+                    f"Ditemukan {non_chrono_cases} trace dengan urutan event yang tidak berurutan secara kronologis "
+                    f"(timestamp mundur); durasi per case diamankan menggunakan rentang (max - min) timestamp."
+                )
+    else:
+        df["_trace_pos"] = df.groupby("case:concept:name", sort=False).cumcount() + 1
+        ts_diffs = df.groupby("case:concept:name", sort=False)["time:timestamp"].diff()
+        non_chrono_mask = ts_diffs.dt.total_seconds() < 0
+        if non_chrono_mask.any():
+            has_non_chrono = True
+            non_chrono_cases = int(df.loc[non_chrono_mask, "case:concept:name"].nunique())
+            warnings.append(
+                f"Ditemukan {non_chrono_cases} trace dengan urutan event yang tidak berurutan secara kronologis "
+                f"(timestamp mundur); durasi per case diamankan menggunakan rentang (max - min) timestamp."
+            )
 
     # Validate optional columns: lifecycle:transition
     has_lc = False
@@ -472,7 +583,7 @@ def load_and_validate_xes(
 
     has_offer = "OfferID" in cols
 
-    total_cases = int(df["case:concept:name"].nunique())
+    total_cases = len(case_uniques)
     total_events = int(len(df))
 
     if progress_callback:
@@ -497,5 +608,14 @@ def load_and_validate_xes(
         warnings=warnings,
     )
 
-    context = EventLogContext(df=df, report=report)
+    context = EventLogContext(
+        df=df,
+        report=report,
+        case_codes=case_codes,
+        case_uniques=case_uniques,
+        starts=starts,
+        ends=ends,
+        counts=counts,
+        has_non_chrono=has_non_chrono,
+    )
     return context, report

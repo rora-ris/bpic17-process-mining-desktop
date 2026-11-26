@@ -28,13 +28,13 @@
 
 | Kode Fitur / Soal | Deskripsi Kebutuhan | Modul & Fungsi Python | Tab / Panel Antarmuka GUI |
 | :--- | :--- | :--- | :--- |
-| **F01** | Impor file `.xes` / `.xes.gz` dengan PM4Py dan validasi atribut wajib (`case:concept:name`, `concept:name`, `time:timestamp`, `lifecycle:transition`, `org:resource`) | `src/core.py` $\rightarrow$ `load_and_validate_xes()`, `EventLogContext` | Tab 1: **1. Dataset & Validasi (F01)** |
-| **F02** | Overview event log, frekuensi aktivitas, durasi tiap case, serta perbandingan *Fast (< 45 hari)* vs *Slow ($\ge$ 45 hari)* | `src/analyzer.py` $\rightarrow$ `analyze_overview()` | Tab 2: **2. Overview & Statistika (F02)** |
-| **F03 (11.7 A–E)** | Jumlah keseluruhan case (A), rata-rata cycle time (B), *successful cases* `Contains('O_Accepted')` (C), *unsuccessful cases* `Contains('O_Refused')` (D), dan *canceled cases* `EndsWith('O_Cancelled')` (E) | `src/analyzer.py` $\rightarrow$ `analyze_exercise_11_7()` (`pm4py.filter_trace_attribute_values` & `pm4py.filter_end_activities`) | Tab 3: **3. Exercise 11.7 A–E (F03)** |
-| **F04 (11.15)** | Jumlah & daftar case di mana `W_Assess potential fraud` selesai (`lifecycle:transition == 'complete'`) minimal 2 kali | `src/analyzer.py` $\rightarrow$ `analyze_exercise_11_15()` | Tab 4: **4. Exercise 11.15 & 11.18 (F04–F05)** (Panel Kiri & Panel Bukti Bawah) |
-| **F05 (11.18)** | Jumlah & daftar case di mana `W_Assess potential fraud` selesai (`complete`) minimal 2 kali oleh `org:resource` yang sama dan valid | `src/analyzer.py` $\rightarrow$ `analyze_exercise_11_18()`, `is_valid_resource()` | Tab 4: **4. Exercise 11.15 & 11.18 (F04–F05)** (Panel Kanan & Panel Bukti Bawah) |
-| **F06 (11.22)** | Analisis urutan event (*eventually follows*): case dengan `O_Cancelled` pada posisi $i$ diikuti `O_Accepted` pada posisi $j$ ($i < j$) beserta persentasenya | `src/analyzer.py` $\rightarrow$ `analyze_exercise_11_22()` | Tab 5: **5. Exercise 11.22 (F06)** |
-| **F07** | Case Explorer (pencarian ID, trace lengkap dengan penyorotan bukti), re-run/reset filter, serta ekspor CSV & HTML | `src/gui.py` & `src/exporter.py` $\rightarrow$ `export_all_to_directory()`, `generate_html_report()` | Tab 6: **6. Case Explorer & Bukti (F07)** & Tab 7: **7. Ringkasan & Ekspor (F07)** |
+| **F01** | Impor file `.xes` / `.xes.gz` dengan PM4Py dan validasi atribut wajib (`case:concept:name`, `concept:name`, `time:timestamp`, `lifecycle:transition`, `org:resource`) | `src/core.py` $\rightarrow$ `load_and_validate_xes()`, `EventLogContext` | Tab **`Data`** (Status bar, *chip* atribut, & banner peringatan) |
+| **F02** | Overview event log, frekuensi aktivitas, distribusi *lifecycle*, durasi tiap case, serta perbandingan *Fast (< 45 hari)* vs *Slow ($\ge$ 45 hari)* | `src/analyzer.py` $\rightarrow$ `analyze_overview()` | Tab **`Data`** (5 kartu metrik, bar aktivitas/lifecycle, histogram 45 hari, dialog durasi) |
+| **F03 (11.7 A–E)** | Jumlah keseluruhan case (A), rata-rata cycle time (B), *successful cases* `Contains('O_Accepted')` (C), *unsuccessful cases* `Contains('O_Refused')` (D), dan *canceled cases* `EndsWith('O_Cancelled')` (E) | `src/analyzer.py` $\rightarrow$ `analyze_exercise_11_7()` | Tab **`Exercise 11.7`** (5 kartu soal, tabel virtual lengkap, & `StripAlur`) |
+| **F04 (11.15)** | Jumlah & daftar case di mana `W_Assess potential fraud` selesai (`lifecycle:transition == 'complete'`) minimal 2 kali | `src/analyzer.py` $\rightarrow$ `analyze_exercise_11_15()` | Tab **`Exercise 11.15 & 11.18`** (Kartu `11.15`, corong, checkbox kasus ditolak, & `StripAlur`) |
+| **F05 (11.18)** | Jumlah & daftar case di mana `W_Assess potential fraud` selesai (`complete`) minimal 2 kali oleh `org:resource` yang sama dan valid | `src/analyzer.py` $\rightarrow$ `analyze_exercise_11_18()`, `is_valid_resource()` | Tab **`Exercise 11.15 & 11.18`** (Kartu `11.18`, corong, checkbox kasus ditolak, & `StripAlur`) |
+| **F06 (11.22)** | Analisis urutan event (*eventually follows*): case dengan `O_Cancelled` pada posisi $i$ diikuti `O_Accepted` pada posisi $j$ ($i < j$) beserta persentasenya | `src/analyzer.py` $\rightarrow$ `analyze_exercise_11_22()` | Tab **`Exercise 11.22`** (Angka jawaban, tabel pasangan posisi, `StripAlur`, & catatan `OfferID`) |
+| **F07** | Case Explorer (pencarian ID dengan *debounce*, filter grup, trace lengkap dengan sorotan bukti), checklist demo, re-run/reset filter, serta ekspor CSV & HTML | `src/gui.py` & `src/exporter.py` $\rightarrow$ `export_all_to_directory()`, `generate_html_report()` | Tab **`Case Explorer`**, panel **`ChecklistDrawer`**, & modal **`Ekspor`** |
 
 ---
 
@@ -158,7 +158,7 @@ Lima contoh case pertama dari 902 case yang lolos Exercise 11.22 (daftar lengkap
 
 ## 6. Pengujian Unit & Verifikasi Skenario Kasus Tepi (Bagian 8)
 
-Pengujian unit diimplementasikan di [`tests/test_edge_cases.py`](tests/test_edge_cases.py) menggunakan log XES sintetis [`data/synthetic_edge_cases.xes`](data/synthetic_edge_cases.xes) (dibangkitkan oleh [`src/synthetic.py`](src/synthetic.py)). Seluruh **9 fungsi uji pytest LULUS 100% (`9 passed`)**:
+Pengujian unit dan integrasi diimplementasikan di [`tests/test_edge_cases.py`](tests/test_edge_cases.py), [`tests/test_f01_f02_data_processing.py`](tests/test_f01_f02_data_processing.py), dan [`tests/test_gui_and_perf.py`](tests/test_gui_and_perf.py) menggunakan log XES sintetis [`data/synthetic_edge_cases.xes`](data/synthetic_edge_cases.xes) (dibangkitkan oleh [`src/synthetic.py`](src/synthetic.py)) serta kasus tepi XML XES. Seluruh **23 fungsi uji pytest LULUS 100% (`23 passed`)** (9 uji skenario tepi Bagian 8, 10 uji *hardening* validasi F01 & konsistensi F02, serta 4 uji *fallback trace* teracak, kolom opsional kosong 100%, vektorisasi 11.22, dan integrasi antarmuka PySide6 + ekspor):
 
 | No | Skenario Uji Wajib (Bagian 8) | Case Sintetis Penguji | Hasil yang Semestinya | Hasil Aktual Pengujian (`pytest`) | Status |
 | :-: | :--- | :--- | :--- | :--- | :-: |
@@ -209,8 +209,8 @@ Seluruh tangkapan layar resolusi penuh tersimpan di folder [`screenshots/`](scre
 2. **Perbedaan Penulisan Kapitalisasi Nama Aktivitas (`W_Assess Potential Fraud` vs `W_Assess potential fraud`)**:
    - *Kendala*: Pada naskah soal tertulis `W_Assess Potential Fraud`, sedangkan nilai atribut `concept:name` di dalam XES BPIC17 adalah `W_Assess potential fraud`.
    - *Solusi*: Menerapkan pencocokan nama aktivitas secara *case-insensitive* (`str.strip().str.lower()`) pada fungsi filter F04 dan F05.
-3. **Render Tabel Berukuran 31.509 Baris di GUI Desktop**:
-   - *Kendala*: Penggunaan `QTableWidget` berbasis *item* biasa akan membekukan memori ketika memuat 31.509 baris case.
-   - *Solusi*: Mengimplementasikan arsitektur *Model-View* menggunakan `QAbstractTableModel` (`DataFrameTableModel`) dan `QSortFilterProxyModel` yang membaca langsung dari memori `pandas.DataFrame` secara *lazy/virtual*, sehingga pencarian dan pengurutan 31.509 case berlangsung instan (< 50 ms).
+3. **Performa & Render Tabel Berukuran 31.509 Baris di GUI Desktop**:
+   - *Kendala*: Penggunaan `QTableWidget` berbasis *item* biasa, `ResizeToContents` pada puluhan ribu baris, maupun *groupby* berulang pada DataFrame 1,2 juta baris dapat membuat aplikasi lambat atau membeku.
+   - *Solusi*: Mengimplementasikan jalur cepat NumPy *contiguous-trace* $O(N)$ dan indeks *slice* case $O(1)$ pada `src/core.py` (memangkas `get_case_events` dari ~199 ms menjadi **< 1 ms** dan total analisis 5 modul menjadi **~0,7 detik**), serta model tabel virtual *zero-copy* (`VirtualColumnTableModel` berbasis `QAbstractTableModel`) dengan lebar kolom `QHeaderView.Interactive` dan *debounce* pencarian `180 ms` sehingga pembukaan dialog/tab 31.509 baris dan pencarian berlangsung instan (< 50 ms) tanpa membekukan UI.
 
 ---
