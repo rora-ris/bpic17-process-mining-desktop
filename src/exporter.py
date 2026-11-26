@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 
@@ -131,6 +131,78 @@ def build_summary_dataframe(
         },
     ]
     return pd.DataFrame(rows)
+
+
+def get_export_target_dataframe(
+    target_key: str,
+    ctx: EventLogContext,
+    ov: OverviewResult,
+    r117: Exercise117Result,
+    r1115: Exercise1115Result,
+    r1118: Exercise1118Result,
+    r1122: Exercise1122Result,
+) -> Tuple[pd.DataFrame, str, str]:
+    """Returns (dataframe, default_filename, display_title) for a single CSV export target."""
+    targets = {
+        "summary": (
+            build_summary_dataframe(ctx, ov, r117, r1115, r1118, r1122),
+            "01_ringkasan_jawaban_latihan.csv",
+            "Ringkasan jawaban latihan",
+        ),
+        "overview_activities": (
+            ov.activity_table,
+            "02_overview_frekuensi_aktivitas.csv",
+            "Frekuensi aktivitas",
+        ),
+        "11_7_all": (
+            ov.case_table,
+            "cases_11_7_A_B_seluruh_case.csv",
+            "Daftar seluruh case 11.7 A dan B",
+        ),
+        "11_7_c": (
+            r117.sub_c.case_df,
+            "03_cases_11_7_C_successful_O_Accepted.csv",
+            "Daftar case 11.7 C (Successful)",
+        ),
+        "11_7_d": (
+            r117.sub_d.case_df,
+            "04_cases_11_7_D_unsuccessful_O_Refused.csv",
+            "Daftar case 11.7 D (Unsuccessful)",
+        ),
+        "11_7_e": (
+            r117.sub_e.case_df,
+            "05_cases_11_7_E_canceled_endpoint_O_Cancelled.csv",
+            "Daftar case 11.7 E (Canceled)",
+        ),
+        "11_15_cases": (
+            r1115.case_summary_df,
+            "06_cases_11_15_repeated_complete_fraud.csv",
+            "Daftar case 11.15",
+        ),
+        "11_15_events": (
+            r1115.evidence_events_df,
+            "07_evidence_events_11_15.csv",
+            "Bukti event 11.15",
+        ),
+        "11_18_cases": (
+            r1118.case_resource_summary_df,
+            "08_cases_11_18_same_resource_fraud.csv",
+            "Daftar case 11.18",
+        ),
+        "11_18_events": (
+            r1118.evidence_events_df,
+            "09_evidence_events_11_18.csv",
+            "Bukti event 11.18",
+        ),
+        "11_22_cases": (
+            r1122.case_summary_df,
+            "10_cases_11_22_cancelled_followed_by_accepted.csv",
+            "Daftar case 11.22",
+        ),
+    }
+    if target_key not in targets:
+        raise ValueError(f"Target ekspor tidak dikenal: {target_key}")
+    return targets[target_key]
 
 
 def export_all_to_directory(
