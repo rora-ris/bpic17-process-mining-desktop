@@ -581,7 +581,7 @@ class BarAktivitas(QWidget):
         layout.addWidget(self.pbar, stretch=1)
 
         self.lbl_cnt = QLabel(fmt_int(count))
-        self.lbl_cnt.setFixedWidth(76)
+        self.lbl_cnt.setMinimumWidth(85)
         self.lbl_cnt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.lbl_cnt.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 600;")
         layout.addWidget(self.lbl_cnt)
