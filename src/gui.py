@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -75,7 +76,13 @@ from .analyzer import (
     analyze_exercise_11_22,
     analyze_overview,
 )
-from .core import EventLogContext, ValidationReport, get_environment_info, load_and_validate_xes
+from .core import (
+    EventLogContext,
+    ValidationReport,
+    get_environment_info,
+    is_valid_resource,
+    load_and_validate_xes,
+)
 from .exporter import (
     build_summary_dataframe,
     export_all_to_directory,
@@ -573,8 +580,8 @@ class BarAktivitas(QWidget):
         )
         layout.addWidget(self.pbar, stretch=1)
 
-        self.lbl_cnt = QLabel(str(count))
-        self.lbl_cnt.setFixedWidth(40)
+        self.lbl_cnt = QLabel(fmt_int(count))
+        self.lbl_cnt.setFixedWidth(76)
         self.lbl_cnt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.lbl_cnt.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 600;")
         layout.addWidget(self.lbl_cnt)
@@ -590,10 +597,10 @@ class StripAlur(QFrame):
             f"QFrame#StripAlur {{ background: transparent; border: none; "
             f"border-top: 1px solid {BORDER}; border-bottom: 1px solid {BORDER}; }}"
         )
-        self.setFixedHeight(54)
+        self.setFixedHeight(62)
 
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(0, 8, 0, 8)
+        main_layout.setContentsMargins(0, 6, 0, 6)
         main_layout.setSpacing(12)
 
         self.lbl_title = QLabel("Bukti:")
@@ -602,7 +609,7 @@ class StripAlur(QFrame):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedHeight(38)
+        scroll.setFixedHeight(48)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet("background: transparent; border: none;")
@@ -628,11 +635,13 @@ class StripAlur(QFrame):
         self.lbl_title.setText(f"Bukti {short_id}:")
         self.lbl_title.setToolTip(str(case_id) if case_id else "")
 
-        # Clear existing chips
+        # Clear existing chips immediately so old widgets never ghost over new ones
         while self.flow_layout.count():
             item = self.flow_layout.takeAt(0)
             w = item.widget()
             if w:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
 
         if not events:
@@ -641,50 +650,82 @@ class StripAlur(QFrame):
             self.flow_layout.addWidget(lbl)
             return
 
-        for i, ev in enumerate(events):
-            act = str(ev.get("concept:name", "—"))
-            lc_raw = ev.get("lifecycle:transition", "")
-            lc = "" if pd.isna(lc_raw) else str(lc_raw).strip()
-            res_raw = ev.get("org:resource", "")
-            res = "" if pd.isna(res_raw) else str(res_raw).strip()
-            dt = format_short_date(str(ev.get("time:timestamp", "")))
-            is_hl = i in highlights
-            short_act = shorten_activity_name(act)
+        hl_set = set(highlights)
+        n_ev = len(events)
+        if n_ev > 18:
+            keep = {0, n_ev - 1} | hl_set
+            sorted_keep = sorted(i for i in keep if 0 <= i < n_ev)
+            render_items: List[Tuple[str, Any]] = []
+            prev = -1
+            for idx in sorted_keep:
+                gap = idx - prev - 1
+                if gap == 1:
+                    render_items.append(("event", prev + 1))
+                elif gap > 1:
+                    render_items.append(("gap", gap))
+                render_items.append(("event", idx))
+                prev = idx
+        else:
+            render_items = [("event", i) for i in range(n_ev)]
 
-            chip = QFrame()
-            chip_layout = QHBoxLayout(chip)
-            chip_layout.setContentsMargins(10, 4, 10, 4)
-
-            parts = [short_act]
-            if lc:
-                parts.append(lc)
-            if show_resource_and_date or is_hl:
-                if res and res.lower() not in ("nan", "none", "null"):
-                    parts.append(res)
-                elif show_resource_and_date:
-                    parts.append("tanpa resource")
-                if dt:
-                    parts.append(dt)
-            txt = ", ".join(parts)
-
-            if is_hl:
+        for pos_idx, (kind, payload) in enumerate(render_items):
+            if kind == "gap":
+                chip = QFrame()
+                chip_layout = QHBoxLayout(chip)
+                chip_layout.setContentsMargins(10, 4, 10, 4)
                 chip.setStyleSheet(
-                    f"background-color: {AMBER_BG}; border: 1px solid {AMBER_BORDER}; border-radius: 6px;"
+                    f"background-color: {BG_SURFACE_MUTED}; border: 1px dashed {BORDER}; border-radius: 6px;"
                 )
-                lbl_ev = QLabel(txt)
-                lbl_ev.setStyleSheet(f"background: transparent; border: none; color: {AMBER_TEXT}; font-weight: 600; font-size: 12px;")
+                lbl_gap = QLabel(f"... {payload} event lain ...")
+                lbl_gap.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 12px;")
+                chip_layout.addWidget(lbl_gap)
+                self.flow_layout.addWidget(chip)
             else:
-                chip.setStyleSheet(
-                    f"background-color: {BG_SURFACE_MUTED}; border: 1px solid {BORDER}; border-radius: 6px;"
-                )
-                lbl_ev = QLabel(txt)
-                lbl_ev.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 12px;")
+                i = int(payload)
+                ev = events[i]
+                act = str(ev.get("concept:name", "—"))
+                lc_raw = ev.get("lifecycle:transition", "")
+                lc = "" if pd.isna(lc_raw) else str(lc_raw).strip()
+                res_raw = ev.get("org:resource", "")
+                res = "" if pd.isna(res_raw) else str(res_raw).strip()
+                dt = format_short_date(str(ev.get("time:timestamp", "")))
+                is_hl = i in hl_set
+                short_act = shorten_activity_name(act)
 
-            chip_layout.addWidget(lbl_ev)
-            self.flow_layout.addWidget(chip)
+                chip = QFrame()
+                chip_layout = QHBoxLayout(chip)
+                chip_layout.setContentsMargins(10, 4, 10, 4)
+
+                parts = [short_act]
+                if lc:
+                    parts.append(lc)
+                if show_resource_and_date or is_hl:
+                    if res and res.lower() not in ("nan", "none", "null"):
+                        parts.append(res)
+                    elif show_resource_and_date:
+                        parts.append("tanpa resource")
+                    if dt:
+                        parts.append(dt)
+                txt = ", ".join(parts)
+
+                if is_hl:
+                    chip.setStyleSheet(
+                        f"background-color: {AMBER_BG}; border: 1px solid {AMBER_BORDER}; border-radius: 6px;"
+                    )
+                    lbl_ev = QLabel(txt)
+                    lbl_ev.setStyleSheet(f"background: transparent; border: none; color: {AMBER_TEXT}; font-weight: 600; font-size: 12px;")
+                else:
+                    chip.setStyleSheet(
+                        f"background-color: {BG_SURFACE_MUTED}; border: 1px solid {BORDER}; border-radius: 6px;"
+                    )
+                    lbl_ev = QLabel(txt)
+                    lbl_ev.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 12px;")
+
+                chip_layout.addWidget(lbl_ev)
+                self.flow_layout.addWidget(chip)
 
             # Arrow connector (pengecualian tunggal StripAlur)
-            if i < len(events) - 1:
+            if pos_idx < len(render_items) - 1:
                 lbl_arrow = QLabel("→")
                 lbl_arrow.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 14px; font-weight: 700;")
                 self.flow_layout.addWidget(lbl_arrow)
@@ -695,8 +736,71 @@ class StripAlur(QFrame):
 # ======================================================================
 # DATA MODELS & CUSTOM GRAPHICS FOR TABLES / CHARTS
 # ======================================================================
+class VirtualColumnTableModel(QAbstractTableModel):
+    """Zero-copy virtual Qt TableModel backed by columnar arrays/lists for 31,509+ rows."""
+
+    def __init__(
+        self,
+        headers: List[str],
+        columns: List[Sequence[Any]],
+        formatters: Optional[List[Optional[Callable[[Any], str]]]] = None,
+        tooltips_col0: Optional[Sequence[Any]] = None,
+        bold_col0: bool = True,
+        parent: Optional[QObject] = None,
+    ):
+        super().__init__(parent)
+        self._headers = headers
+        self._columns = columns
+        self._formatters = formatters or [None] * len(headers)
+        self._tooltips_col0 = tooltips_col0
+        self._bold_col0 = bold_col0
+        self._row_count = len(columns[0]) if columns else 0
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return self._row_count
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._headers)
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole) -> Any:
+        if orientation == Qt.Horizontal:
+            if role == Qt.DisplayRole and 0 <= section < len(self._headers):
+                return self._headers[section]
+            if role == Qt.TextAlignmentRole:
+                return int(Qt.AlignLeft | Qt.AlignVCenter)
+        return None
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+        if not index.isValid():
+            return None
+        r, c = index.row(), index.column()
+        if not (0 <= r < self._row_count and 0 <= c < len(self._columns)):
+            return None
+
+        raw = self._columns[c][r]
+        if role == Qt.DisplayRole:
+            fmt = self._formatters[c]
+            return fmt(raw) if fmt is not None else str(raw)
+        if role == Qt.ToolTipRole:
+            if c == 0 and self._tooltips_col0 is not None:
+                return str(self._tooltips_col0[r])
+            fmt = self._formatters[c]
+            return fmt(raw) if fmt is not None else str(raw)
+        if role == Qt.TextAlignmentRole:
+            return int(Qt.AlignLeft | Qt.AlignVCenter)
+        if role == Qt.FontRole and c == 0 and self._bold_col0:
+            f = QFont()
+            f.setBold(True)
+            return f
+        return None
+
+
 class Simple3ColTableModel(QAbstractTableModel):
-    """Generic table model supporting left-aligned headers/cells, tooltips, and optional subtexts."""
+    """Generic table model supporting left-aligned headers/cells, tooltips, backgrounds, and optional subtexts."""
 
     def __init__(
         self,
@@ -705,12 +809,14 @@ class Simple3ColTableModel(QAbstractTableModel):
         parent: Optional[QObject] = None,
         subtexts: Optional[Dict[Tuple[int, int], str]] = None,
         tooltips: Optional[Dict[Tuple[int, int], str]] = None,
+        highlight_rows: Optional[set] = None,
     ):
         super().__init__(parent)
         self._headers = headers
         self._rows = rows
         self._subtexts = subtexts or {}
         self._tooltips = tooltips or {}
+        self._highlight_rows = highlight_rows or set()
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self._rows)
@@ -744,6 +850,8 @@ class Simple3ColTableModel(QAbstractTableModel):
             f = QFont()
             f.setBold(True)
             return f
+        if role == Qt.BackgroundRole and r in self._highlight_rows:
+            return QColor(AMBER_BG)
         if role == Qt.ForegroundRole:
             s_val = str(val)
             if s_val == "Ya":
@@ -760,9 +868,13 @@ class ActivityLifecycleDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         painter.save()
+        bg_val = index.data(Qt.BackgroundRole)
         if option.state & QStyle.State_Selected:
             painter.fillRect(option.rect, QColor(SELECTION_BG))
             text_color = QColor(SELECTION_TEXT)
+        elif isinstance(bg_val, QColor):
+            painter.fillRect(option.rect, bg_val)
+            text_color = QColor(AMBER_TEXT)
         else:
             text_color = QColor(TEXT_PRIMARY)
 
@@ -771,7 +883,7 @@ class ActivityLifecycleDelegate(QStyledItemDelegate):
 
         rect = option.rect.adjusted(10, 4, -10, -4)
         f_main = QFont(option.font)
-        f_main.setPointSize(13)
+        f_main.setPixelSize(13)
         painter.setFont(f_main)
         painter.setPen(text_color)
 
@@ -781,9 +893,9 @@ class ActivityLifecycleDelegate(QStyledItemDelegate):
             painter.drawText(top_rect, Qt.AlignLeft | Qt.AlignVCenter, act_text)
 
             f_sub = QFont(option.font)
-            f_sub.setPointSize(12)
+            f_sub.setPixelSize(12)
             painter.setFont(f_sub)
-            painter.setPen(QColor(TEXT_MUTED))
+            painter.setPen(QColor(AMBER_TEXT if isinstance(bg_val, QColor) and not (option.state & QStyle.State_Selected) else TEXT_MUTED))
             painter.drawText(bot_rect, Qt.AlignLeft | Qt.AlignVCenter, lc_text)
         else:
             painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, act_text)
@@ -852,10 +964,13 @@ class HistogramDurasiWidget(QWidget):
         painter.drawLine(int(tx), pad_t - 4, int(tx), pad_t + plot_h)
 
         f = painter.font()
-        f.setPointSize(12)
+        f.setPixelSize(12)
         painter.setFont(f)
         painter.setPen(QColor(RED))
-        label_x = min(int(tx) + 4, w - 58)
+        if int(tx) + 58 <= w - pad_r:
+            label_x = int(tx) + 4
+        else:
+            label_x = max(pad_l, int(tx) - 52)
         painter.drawText(label_x, pad_t + 8, "45 hari")
 
         painter.setPen(QColor(TEXT_MUTED))
@@ -899,7 +1014,7 @@ class Corong1115Widget(QWidget):
             r_layout.addWidget(pbar, stretch=1)
 
             lbl_v = QLabel("—")
-            lbl_v.setFixedWidth(110)
+            lbl_v.setMinimumWidth(160)
             lbl_v.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             lbl_v.setStyleSheet(f"background: transparent; border: none; font-size: 13px; font-weight: 600; color: {TEXT_PRIMARY};")
             r_layout.addWidget(lbl_v)
@@ -1065,22 +1180,38 @@ class CaseDurationDialog(QDialog):
 
     def _populate_table(self, df: pd.DataFrame) -> None:
         headers = ["Case ID", "Jml Event", "Durasi (Hari)", "Durasi (Jam)", "Aktivitas Awal", "Aktivitas Akhir"]
-        rows = [
-            [
-                str(r.case_id),
-                fmt_int(r.event_count),
-                f"{fmt_num(r.duration_days, 2)} hari",
-                f"{fmt_num(r.duration_hours, 2)} jam",
-                str(r.first_activity),
-                str(r.last_activity),
+        if df.empty:
+            columns: List[Sequence[Any]] = [[] for _ in headers]
+            cids: Sequence[Any] = []
+        else:
+            cids = df["case_id"].astype(str).tolist()
+            columns = [
+                cids,
+                df["event_count"].to_numpy(),
+                df["duration_days"].to_numpy(),
+                df["duration_hours"].to_numpy(),
+                df["first_activity"].astype(str).tolist(),
+                df["last_activity"].astype(str).tolist(),
             ]
-            for r in df.itertuples(index=False)
+        formatters: List[Optional[Callable[[Any], str]]] = [
+            None,
+            lambda v: fmt_int(int(v)),
+            lambda v: f"{fmt_num(float(v), 2)} hari",
+            lambda v: f"{fmt_num(float(v), 2)} jam",
+            None,
+            None,
         ]
-        model = Simple3ColTableModel(headers, rows, self)
+        model = VirtualColumnTableModel(
+            headers,
+            columns,
+            formatters=formatters,
+            tooltips_col0=cids,
+            parent=self,
+        )
         self.table.setModel(model)
         hh = self.table.horizontalHeader()
         hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        for col_idx, w in enumerate((220, 75, 110, 105, 145)):
+        for col_idx, w in enumerate((220, 80, 115, 110, 145)):
             hh.setSectionResizeMode(col_idx, QHeaderView.Interactive)
             self.table.setColumnWidth(col_idx, w)
         hh.setSectionResizeMode(5, QHeaderView.Stretch)
@@ -1133,17 +1264,21 @@ class FastSlowDialog(QDialog):
         blayout.setSpacing(12)
 
         blayout.addWidget(QLabel("Fast Cases (< 45 hari):"), 0, 0)
-        lbl_fast = QLabel(f"<b>{ov.fast_cases_count:,} case</b> ({ov.fast_cases_pct:.1f}%)")
+        lbl_fast = QLabel(
+            f"<b>{fmt_int(ov.fast_cases_count)} case</b> ({fmt_num(ov.fast_cases_pct, 1)}%, rata-rata {fmt_num(ov.fast_cases_mean_days, 2)} hari)"
+        )
         lbl_fast.setStyleSheet(f"color: {GREEN};")
         blayout.addWidget(lbl_fast, 0, 1)
 
         blayout.addWidget(QLabel("Slow Cases (>= 45 hari):"), 1, 0)
-        lbl_slow = QLabel(f"<b>{ov.slow_cases_count:,} case</b> ({ov.slow_cases_pct:.1f}%)")
-        lbl_slow.setStyleSheet(f"color: {YELLOW};")
+        lbl_slow = QLabel(
+            f"<b>{fmt_int(ov.slow_cases_count)} case</b> ({fmt_num(ov.slow_cases_pct, 1)}%, rata-rata {fmt_num(ov.slow_cases_mean_days, 2)} hari)"
+        )
+        lbl_slow.setStyleSheet(f"color: {AMBER_TEXT};")
         blayout.addWidget(lbl_slow, 1, 1)
 
         blayout.addWidget(QLabel("Total Denominator:"), 2, 0)
-        blayout.addWidget(QLabel(f"{ov.total_cases:,} case (100%)"), 2, 1)
+        blayout.addWidget(QLabel(f"{fmt_int(ov.total_cases)} case (100%)"), 2, 1)
 
         layout.addWidget(box)
         layout.addStretch()
@@ -1219,6 +1354,7 @@ class ChecklistDrawer(QFrame):
     """Right-side sliding drawer panel for Lampiran A demonstration checklist."""
 
     navigate_to_tab = Signal(int)
+    progress_changed = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -1327,11 +1463,12 @@ class ChecklistDrawer(QFrame):
         self,
         has_data: bool = False,
         has_analysis: bool = False,
+        is_bpic17: bool = False,
         is_synthetic: bool = False,
         exported: bool = False,
     ) -> None:
         self.checkboxes[0].setChecked(True)  # Item 1 always true
-        self.checkboxes[1].setChecked(has_data)
+        self.checkboxes[1].setChecked(has_data and (is_bpic17 or self.checkboxes[1].isChecked()))
         self.checkboxes[2].setChecked(has_analysis)
         self.checkboxes[3].setChecked(has_analysis)
         self.checkboxes[4].setChecked(has_analysis)
@@ -1339,7 +1476,7 @@ class ChecklistDrawer(QFrame):
         self.checkboxes[6].setChecked(has_analysis)
         if exported:
             self.checkboxes[7].setChecked(True)
-        self.checkboxes[8].setChecked(is_synthetic)
+        self.checkboxes[8].setChecked(is_synthetic or self.checkboxes[8].isChecked())
         self._recompute_progress()
 
     def _recompute_progress(self) -> None:
@@ -1347,6 +1484,7 @@ class ChecklistDrawer(QFrame):
         total = len(self.checkboxes)
         self.pbar.setValue(done)
         self.lbl_progress.setText(f"{done} dari {total} item selesai")
+        self.progress_changed.emit(f"{done}/{total}")
 
     def get_progress_text(self) -> str:
         done = sum(1 for cb in self.checkboxes if cb.isChecked())
@@ -1367,6 +1505,42 @@ class FullAnalysisBundle:
     ex1115: Exercise1115Result
     ex1118: Exercise1118Result
     ex1122: Exercise1122Result
+    case_category_tags: Dict[str, str] = field(default_factory=dict)
+
+
+def _compute_case_category_tags(
+    ov: OverviewResult,
+    r117: Exercise117Result,
+    r1115: Exercise1115Result,
+    r1118: Exercise1118Result,
+    r1122: Exercise1122Result,
+) -> Dict[str, str]:
+    """Precomputes 'Lolos di' tags per case_id in O(N)."""
+    c_set = set(r117.sub_c.case_df["case_id"].astype(str)) if not r117.sub_c.case_df.empty else set()
+    d_set = set(r117.sub_d.case_df["case_id"].astype(str)) if not r117.sub_d.case_df.empty else set()
+    e_set = set(r117.sub_e.case_df["case_id"].astype(str)) if not r117.sub_e.case_df.empty else set()
+    s15_set = set(r1115.case_summary_df["case_id"].astype(str)) if not r1115.case_summary_df.empty else set()
+    s18_set = set(r1118.case_resource_summary_df["case_id"].astype(str)) if not r1118.case_resource_summary_df.empty else set()
+    s22_set = set(r1122.case_summary_df["case_id"].astype(str)) if not r1122.case_summary_df.empty else set()
+
+    tags_map: Dict[str, str] = {}
+    for cid in ov.case_table["case_id"].astype(str).tolist():
+        t = []
+        if cid in c_set:
+            t.append("C")
+        if cid in d_set:
+            t.append("D")
+        if cid in e_set:
+            t.append("E")
+        if cid in s15_set:
+            t.append("15")
+        if cid in s18_set:
+            t.append("18")
+        if cid in s22_set:
+            t.append("22")
+        if t:
+            tags_map[cid] = ", ".join(t)
+    return tags_map
 
 
 class AnalysisWorker(QThread):
@@ -1406,10 +1580,12 @@ class AnalysisWorker(QThread):
             r1115 = analyze_exercise_11_15(ctx)
 
             self.progress_changed.emit(92, "Menghitung Exercise 11.18...")
-            r1118 = analyze_exercise_11_18(ctx)
+            r1118 = analyze_exercise_11_18(ctx, res_1115=r1115)
 
             self.progress_changed.emit(97, "Menghitung Exercise 11.22...")
             r1122 = analyze_exercise_11_22(ctx)
+
+            tags_map = _compute_case_category_tags(ov, r117, r1115, r1118, r1122)
 
             bundle = FullAnalysisBundle(
                 context=ctx,
@@ -1419,6 +1595,7 @@ class AnalysisWorker(QThread):
                 ex1115=r1115,
                 ex1118=r1118,
                 ex1122=r1122,
+                case_category_tags=tags_map,
             )
             self.progress_changed.emit(100, "Siap")
             self.finished_bundle.emit(bundle)
@@ -1442,12 +1619,30 @@ class MainWindow(QMainWindow):
         self.bundle: Optional[FullAnalysisBundle] = None
         self.worker: Optional[AnalysisWorker] = None
         self.has_exported: bool = False
+        self.seen_bpic17: bool = False
+        self.seen_synthetic: bool = False
         self.f02_unit: str = "hari"  # "hari", "jam", "detik"
         self.f02_precision: int = 2
         self.selected_117_sub: str = "11.7 A"
         self.selected_1518_sub: str = "11.15"
 
         self._setup_ui()
+        QTimer.singleShot(150, self._prewarm_pm4py)
+
+    @staticmethod
+    def _do_prewarm_pm4py() -> None:
+        try:
+            import pm4py  # noqa: F401
+        except Exception:
+            pass
+
+    def _prewarm_pm4py(self) -> None:
+        threading.Thread(target=self._do_prewarm_pm4py, daemon=True).start()
+
+    def closeEvent(self, event) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.wait(5000)
+        super().closeEvent(event)
 
     def _setup_ui(self) -> None:
         central = QWidget()
@@ -1465,9 +1660,7 @@ class MainWindow(QMainWindow):
         # 1. Header (height 64px, deep navy #0B1F5C)
         self._setup_header(c_layout)
 
-        # 2. Main Tabs (Data, Jawaban, Detail, Case Explorer)
-        self.tabs = QTabWidget()
-        self.tabs.setFixedHeight(44)
+        # 2. Main Tabs (Data, Exercise 11.7, Exercise 11.15 & 11.18, Exercise 11.22, Case Explorer)
         c_layout.addWidget(self._setup_tab_bar())
 
         # Area isi tab (Stacked or QTabWidget content)
@@ -1495,8 +1688,10 @@ class MainWindow(QMainWindow):
         # 3. Right Checklist Drawer (Lampiran A)
         self.drawer = ChecklistDrawer(self)
         self.drawer.navigate_to_tab.connect(self._on_navigate_from_drawer)
+        self.drawer.progress_changed.connect(lambda p: self.btn_checklist_chip.setText(f"Checklist {p}"))
         self.drawer.hide()
         root_layout.addWidget(self.drawer)
+        self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
 
         # 4. Status Bar
         self.status_bar = QStatusBar()
@@ -1719,6 +1914,22 @@ class MainWindow(QMainWindow):
         chips_row.addWidget(self.chip_resource)
         chips_row.addStretch()
         layout.addLayout(chips_row)
+
+        # Validation warnings banner (hidden when warnings list is empty)
+        self.box_warnings = QFrame()
+        self.box_warnings.setObjectName("BoxWarnings")
+        self.box_warnings.setStyleSheet(
+            f"QFrame#BoxWarnings {{ background-color: {AMBER_BG}; border: 1px solid {AMBER_BORDER}; "
+            f"border-radius: 8px; padding: 8px 12px; }}"
+        )
+        warn_l = QVBoxLayout(self.box_warnings)
+        warn_l.setContentsMargins(0, 0, 0, 0)
+        self.lbl_warnings_msg = QLabel("")
+        self.lbl_warnings_msg.setWordWrap(True)
+        self.lbl_warnings_msg.setStyleSheet(f"background: transparent; border: none; color: {AMBER_TEXT}; font-size: 12px;")
+        warn_l.addWidget(self.lbl_warnings_msg)
+        self.box_warnings.setVisible(False)
+        layout.addWidget(self.box_warnings)
 
         # Horizontal 1 px divider separating top summary from bottom details
         h_div = QFrame()
@@ -2038,75 +2249,75 @@ class MainWindow(QMainWindow):
         )
         self.lbl_117_notes.setText(f"{cd_note}.   {e_note}.")
 
-        # Render selected sub-question table
+        # Render selected sub-question table (Virtual zero-copy model — all rows, <5ms)
         code = self.selected_117_sub
         self.lbl_117_dur_badge.setVisible(False)
         headers: List[str] = ["Case", "Durasi", "Status"]
-        rows: List[List[Any]] = []
+        columns: List[Sequence[Any]] = [[], [], []]
+        formatters: List[Optional[Callable[[Any], str]]] = [None, lambda v: f"{fmt_num(float(v), p)} hari", None]
         raw_ids: List[str] = []
-        tooltips: Dict[Tuple[int, int], str] = {}
 
         if code == "11.7 A":
             self.lbl_117_rule.setText("11.7 A: Hitung seluruh unique case/trace dari keseluruhan event log aktif")
             headers = ["Case", "Jml Event", "Durasi"]
-            top_cases = ov.case_table.sort_values(by="duration_days", ascending=False).head(200)
-            for idx_r, r in enumerate(top_cases.itertuples(index=False)):
-                cid = str(r.case_id)
-                raw_ids.append(cid)
-                tooltips[(idx_r, 0)] = cid
-                rows.append([format_case_id_middle(cid), f"{fmt_int(r.event_count)} event", f"{fmt_num(r.duration_days, p)} hari"])
+            df_src = ov.case_table.sort_values(by="duration_days", ascending=False)
+            raw_ids = df_src["case_id"].astype(str).tolist()
+            columns = [raw_ids, df_src["event_count"].to_numpy(), df_src["duration_days"].to_numpy()]
+            formatters = [None, lambda v: f"{fmt_int(int(v))} event", lambda v: f"{fmt_num(float(v), p)} hari"]
         elif code == "11.7 B":
             dur = b.ex117.sub_b.mean_duration_days
             self.lbl_117_rule.setText("11.7 B: Rata-rata cycle time seluruh case (event terakhir - event pertama)")
             self.lbl_117_dur_badge.setText(f"Rata-rata {fmt_num(dur, p)} hari ({fmt_num(b.ex117.sub_b.mean_duration_hours, p)} jam)")
             self.lbl_117_dur_badge.setVisible(True)
             headers = ["Case", "Durasi", "Event Terakhir"]
-            for idx_r, r in enumerate(ov.case_table.head(200).itertuples(index=False)):
-                cid = str(r.case_id)
-                raw_ids.append(cid)
-                tooltips[(idx_r, 0)] = cid
-                rows.append([format_case_id_middle(cid), f"{fmt_num(r.duration_days, p)} hari", str(r.last_activity)])
+            df_src = ov.case_table
+            raw_ids = df_src["case_id"].astype(str).tolist()
+            columns = [raw_ids, df_src["duration_days"].to_numpy(), df_src["last_activity"].astype(str).tolist()]
         elif code == "11.7 C":
             sub = b.ex117.sub_c
             self.lbl_117_rule.setText("11.7 C: Case memuat setidaknya satu event O_Accepted (dihitung 1x per case)")
             self.lbl_117_dur_badge.setText(f"Rata-rata {fmt_num(sub.mean_duration_days, p)} hari")
             self.lbl_117_dur_badge.setVisible(True)
             headers = ["Case", "Durasi", "Berakhir di"]
-            for idx_r, r in enumerate(sub.case_df.head(500).itertuples(index=False)):
-                cid = str(r.case_id)
-                raw_ids.append(cid)
-                tooltips[(idx_r, 0)] = cid
-                rows.append([format_case_id_middle(cid), f"{fmt_num(r.duration_days, p)} hari", str(r.last_activity)])
+            df_src = sub.case_df
+            raw_ids = df_src["case_id"].astype(str).tolist()
+            columns = [raw_ids, df_src["duration_days"].to_numpy(), df_src["last_activity"].astype(str).tolist()]
         elif code == "11.7 D":
             sub = b.ex117.sub_d
             self.lbl_117_rule.setText("11.7 D: Case memuat setidaknya satu event O_Refused (tidak saling eksklusif)")
             self.lbl_117_dur_badge.setText(f"Rata-rata {fmt_num(sub.mean_duration_days, p)} hari")
             self.lbl_117_dur_badge.setVisible(True)
             headers = ["Case", "Durasi", "Berakhir di"]
-            for idx_r, r in enumerate(sub.case_df.head(500).itertuples(index=False)):
-                cid = str(r.case_id)
-                raw_ids.append(cid)
-                tooltips[(idx_r, 0)] = cid
-                rows.append([format_case_id_middle(cid), f"{fmt_num(r.duration_days, p)} hari", str(r.last_activity)])
+            df_src = sub.case_df
+            raw_ids = df_src["case_id"].astype(str).tolist()
+            columns = [raw_ids, df_src["duration_days"].to_numpy(), df_src["last_activity"].astype(str).tolist()]
         elif code == "11.7 E":
             sub = b.ex117.sub_e
             self.lbl_117_rule.setText("11.7 E: Event TERAKHIR pada trace adalah O_Cancelled (Endpoint filter)")
             self.lbl_117_dur_badge.setText(f"Rata-rata {fmt_num(sub.mean_duration_days, p)} hari")
             self.lbl_117_dur_badge.setVisible(True)
             headers = ["Case", "Durasi", "Berakhir di"]
-            for idx_r, r in enumerate(sub.case_df.head(500).itertuples(index=False)):
-                cid = str(r.case_id)
-                raw_ids.append(cid)
-                tooltips[(idx_r, 0)] = cid
-                rows.append([format_case_id_middle(cid), f"{fmt_num(r.duration_days, p)} hari", "O_Cancelled"])
+            df_src = sub.case_df
+            raw_ids = df_src["case_id"].astype(str).tolist()
+            columns = [raw_ids, df_src["duration_days"].to_numpy(), ["O_Cancelled"] * len(raw_ids)]
 
         self._raw_ids_117 = raw_ids
-        model = Simple3ColTableModel(headers, rows, self, tooltips=tooltips)
+        model = VirtualColumnTableModel(
+            headers,
+            columns,
+            formatters=formatters,
+            tooltips_col0=raw_ids,
+            parent=self,
+        )
         self.table_117.setModel(model)
-        self.table_117.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.table_117.horizontalHeader().setStretchLastSection(True)
+        hh = self.table_117.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Interactive)
+        hh.setSectionResizeMode(1, QHeaderView.Interactive)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table_117.setColumnWidth(0, 260)
+        self.table_117.setColumnWidth(1, 140)
 
-        if rows:
+        if raw_ids:
             self.table_117.selectRow(0)
             self._update_evidence_strip(self.strip_117, raw_ids[0], code)
         else:
@@ -2231,17 +2442,17 @@ class MainWindow(QMainWindow):
                 )
                 self.lbl_1518_notice.setVisible(True)
                 headers = ["Case (Tidak Lolos)", "Complete / Total", "Alasan Ditolak"]
-                df_all_w = b.context.df[
-                    b.context.df["concept:name"].astype(str).str.strip().str.lower() == "w_assess potential fraud"
-                ]
-                has_lc = "lifecycle:transition" in df_all_w.columns
-                for idx_r, cid in enumerate(r15.excluded_case_ids[:200]):
-                    sub_w = df_all_w[df_all_w["case:concept:name"].astype(str) == cid]
-                    tot_w = len(sub_w)
-                    comp_w = int((sub_w["lifecycle:transition"].astype(str).str.strip().str.lower() == "complete").sum()) if has_lc else tot_w
-                    raw_ids.append(cid)
-                    tooltips[(idx_r, 0)] = cid
-                    rows.append([format_case_id_middle(cid), f"{comp_w}x / {tot_w}x", "Ditolak: < 2 complete"])
+                excl_df = r15.excluded_summary_df
+                if not excl_df.empty:
+                    for idx_r, r in enumerate(excl_df.head(200).itertuples(index=False)):
+                        cid = str(r.case_id)
+                        raw_ids.append(cid)
+                        tooltips[(idx_r, 0)] = cid
+                        rows.append([
+                            format_case_id_middle(cid),
+                            f"{int(r.complete_occurrences)}x / {int(r.all_lifecycle_occurrences)}x",
+                            "Ditolak: < 2 complete",
+                        ])
             else:
                 headers = ["Case", "Jumlah complete", "Resource sama"]
                 same_res_cids = set(r18.case_resource_summary_df["case_id"].astype(str)) if not r18.case_resource_summary_df.empty else set()
@@ -2285,8 +2496,12 @@ class MainWindow(QMainWindow):
         self._raw_ids_1518 = raw_ids
         model = Simple3ColTableModel(headers, rows, self, tooltips=tooltips)
         self.table_1518.setModel(model)
-        self.table_1518.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.table_1518.horizontalHeader().setStretchLastSection(True)
+        hh = self.table_1518.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Interactive)
+        hh.setSectionResizeMode(1, QHeaderView.Interactive)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table_1518.setColumnWidth(0, 260)
+        self.table_1518.setColumnWidth(1, 180)
 
         if rows:
             self.table_1518.selectRow(0)
@@ -2376,14 +2591,22 @@ class MainWindow(QMainWindow):
         self.lbl_22_badge.setText(f"{fmt_int(r22.matching_case_count)} dari {fmt_int(total)} case")
 
         headers = ["Case", "Posisi O_Cancelled (i)", "Posisi O_Accepted (j)"]
-        rows: List[List[Any]] = []
-        raw_ids: List[str] = []
-        tooltips: Dict[Tuple[int, int], str] = {}
-        for idx_r, r in enumerate(r22.case_summary_df.head(500).itertuples(index=False)):
-            cid = str(r.case_id)
-            raw_ids.append(cid)
-            tooltips[(idx_r, 0)] = cid
-            rows.append([format_case_id_middle(cid), f"Posisi {r.cancelled_trace_pos} (i)", f"Posisi {r.accepted_trace_pos} (j)"])
+        if not r22.case_summary_df.empty:
+            raw_ids = r22.case_summary_df["case_id"].astype(str).tolist()
+            columns: List[Sequence[Any]] = [
+                raw_ids,
+                r22.case_summary_df["cancelled_trace_pos"].to_numpy(),
+                r22.case_summary_df["accepted_trace_pos"].to_numpy(),
+            ]
+        else:
+            raw_ids = []
+            columns = [[], [], []]
+
+        formatters: List[Optional[Callable[[Any], str]]] = [
+            None,
+            lambda v: f"Posisi {int(v)} (i)",
+            lambda v: f"Posisi {int(v)} (j)",
+        ]
 
         self.lbl_22_offer_extra.setText(
             f"Analisis tambahan (Level OfferID): {fmt_int(r22.same_offer_id_matching_count)} case memiliki OfferID identik "
@@ -2391,12 +2614,22 @@ class MainWindow(QMainWindow):
         )
 
         self._raw_ids_1122 = raw_ids
-        model = Simple3ColTableModel(headers, rows, self, tooltips=tooltips)
+        model = VirtualColumnTableModel(
+            headers,
+            columns,
+            formatters=formatters,
+            tooltips_col0=raw_ids,
+            parent=self,
+        )
         self.table_22.setModel(model)
-        self.table_22.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.table_22.horizontalHeader().setStretchLastSection(True)
+        hh = self.table_22.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Interactive)
+        hh.setSectionResizeMode(1, QHeaderView.Interactive)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table_22.setColumnWidth(0, 260)
+        self.table_22.setColumnWidth(1, 180)
 
-        if rows:
+        if raw_ids:
             self.table_22.selectRow(0)
             self._update_evidence_strip(self.strip_22, raw_ids[0], "11.22")
         else:
@@ -2423,24 +2656,7 @@ class MainWindow(QMainWindow):
             return
 
         ev_list = events_df.to_dict(orient="records")
-        hl_indices: List[int] = []
-
-        if code == "11.7 C":
-            hl_indices = [i for i, ev in enumerate(ev_list) if ev.get("concept:name") == "O_Accepted"]
-        elif code == "11.7 D":
-            hl_indices = [i for i, ev in enumerate(ev_list) if ev.get("concept:name") == "O_Refused"]
-        elif code == "11.7 E":
-            if ev_list and ev_list[-1].get("concept:name") == "O_Cancelled":
-                hl_indices = [len(ev_list) - 1]
-        elif code in ("11.15", "11.18"):
-            hl_indices = [
-                i for i, ev in enumerate(ev_list)
-                if ev.get("concept:name") == "W_Assess potential fraud" and ev.get("lifecycle:transition") == "complete"
-            ]
-        elif code == "11.22":
-            for i, ev in enumerate(ev_list):
-                if ev.get("concept:name") in ("O_Cancelled", "O_Accepted"):
-                    hl_indices.append(i)
+        hl_indices = self._compute_highlight_indices(ev_list, code, has_lifecycle=b.report.has_lifecycle)
 
         strip.set_trace(
             case_id,
@@ -2448,6 +2664,50 @@ class MainWindow(QMainWindow):
             hl_indices,
             show_resource_and_date=(code in ("11.15", "11.18")),
         )
+
+    @staticmethod
+    def _compute_highlight_indices(
+        ev_list: List[Dict[str, Any]],
+        code: str,
+        *,
+        has_lifecycle: bool = True,
+    ) -> List[int]:
+        """Determines which event indices in a trace are evidence for the given exercise code."""
+        hl_indices: List[int] = []
+        if code == "11.7 C":
+            hl_indices = [i for i, ev in enumerate(ev_list) if str(ev.get("concept:name", "")).strip() == "O_Accepted"]
+        elif code == "11.7 D":
+            hl_indices = [i for i, ev in enumerate(ev_list) if str(ev.get("concept:name", "")).strip() == "O_Refused"]
+        elif code == "11.7 E":
+            if ev_list and str(ev_list[-1].get("concept:name", "")).strip() == "O_Cancelled":
+                hl_indices = [len(ev_list) - 1]
+        elif code in ("11.15", "11.18"):
+            fraud_comp_indices: List[int] = []
+            res_counts: Dict[str, List[int]] = {}
+            for i, ev in enumerate(ev_list):
+                act_ok = str(ev.get("concept:name", "")).strip().lower() == "w_assess potential fraud"
+                if not act_ok:
+                    continue
+                if has_lifecycle:
+                    lc_ok = str(ev.get("lifecycle:transition", "")).strip().lower() == "complete"
+                else:
+                    lc_ok = True
+                if lc_ok:
+                    fraud_comp_indices.append(i)
+                    res_val = ev.get("org:resource")
+                    if is_valid_resource(res_val):
+                        r_clean = str(res_val).strip()
+                        res_counts.setdefault(r_clean, []).append(i)
+            if code == "11.18":
+                same_res_indices = [i for idxs in res_counts.values() if len(idxs) >= 2 for i in idxs]
+                hl_indices = sorted(same_res_indices) if same_res_indices else fraud_comp_indices
+            else:
+                hl_indices = fraud_comp_indices
+        elif code == "11.22":
+            for i, ev in enumerate(ev_list):
+                if str(ev.get("concept:name", "")).strip() in ("O_Cancelled", "O_Accepted"):
+                    hl_indices.append(i)
+        return hl_indices
 
     def _open_table_selection_in_explorer(self, table_view: QTableView, ids_attr: str) -> None:
         raw_ids = getattr(self, ids_attr, [])
@@ -2458,23 +2718,71 @@ class MainWindow(QMainWindow):
             row = 0
         self._select_case_in_explorer(raw_ids[row])
 
+    def _get_full_export_df_for_label(self, label: str) -> Optional[pd.DataFrame]:
+        """Returns the full untruncated DataFrame corresponding to an exercise tab export."""
+        b = self.bundle
+        if not b:
+            return None
+        if label in ("11.7 A", "11.7 B"):
+            return b.overview.case_table
+        if label == "11.7 C":
+            return b.ex117.sub_c.case_df
+        if label == "11.7 D":
+            return b.ex117.sub_d.case_df
+        if label == "11.7 E":
+            return b.ex117.sub_e.case_df
+        if label == "11.15":
+            if self.chk_show_excluded_1518.isChecked():
+                return b.ex1115.excluded_summary_df
+            return b.ex1115.case_summary_df
+        if label == "11.18":
+            if self.chk_show_excluded_1518.isChecked():
+                excl = b.ex1118.cases_from_1115_excluded_diff_resource
+                df15 = b.ex1115.case_summary_df
+                res_map = dict(zip(df15["case_id"].astype(str), df15["resources_involved"].astype(str))) if not df15.empty else {}
+                rows = [
+                    {
+                        "case_id": cid,
+                        "resources_involved": res_map.get(cid, "-"),
+                        "reason": "Resource kosong" if res_map.get(cid, "").strip() in ("", "-", "nan") else "Resource berbeda",
+                    }
+                    for cid in excl
+                ]
+                return pd.DataFrame(rows)
+            return b.ex1118.case_resource_summary_df
+        if label == "11.22":
+            return b.ex1122.case_summary_df
+        return None
+
     def _export_table_csv(self, table_view: QTableView, label: str) -> None:
         if not self.bundle:
             return
+        safe_lbl = label.replace(" ", "_").replace(".", "_")
         path, _ = QFileDialog.getSaveFileName(
-            self, f"Ekspor CSV {label}", "", "CSV Files (*.csv)"
+            self, f"Ekspor CSV {label}", f"hasil_{safe_lbl}.csv", "CSV Files (*.csv)"
         )
         if not path:
             return
         try:
-            model = table_view.model()
-            if isinstance(model, Simple3ColTableModel):
-                df = pd.DataFrame(model._rows, columns=model._headers)
-                df.to_csv(path, index=False, encoding="utf-8-sig")
-                self.has_exported = True
-                self.drawer.update_states(has_data=True, has_analysis=True, exported=True)
-                self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
-                QMessageBox.information(self, "Ekspor Berhasil", f"Tabel soal {label} disimpan ke:\n{path}")
+            full_df = self._get_full_export_df_for_label(label)
+            if full_df is not None:
+                full_df.to_csv(path, index=False, encoding="utf-8-sig")
+            else:
+                model = table_view.model()
+                if isinstance(model, Simple3ColTableModel):
+                    df = pd.DataFrame(model._rows, columns=model._headers)
+                    df.to_csv(path, index=False, encoding="utf-8-sig")
+            self.has_exported = True
+            is_bpic = not ("synthetic" in self.bundle.report.file_name.lower())
+            self.drawer.update_states(
+                has_data=True,
+                has_analysis=True,
+                is_bpic17=self.seen_bpic17 or is_bpic,
+                is_synthetic=self.seen_synthetic or (not is_bpic),
+                exported=True,
+            )
+            self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
+            QMessageBox.information(self, "Ekspor Berhasil", f"Tabel soal {label} disimpan ke:\n{path}")
         except Exception as exc:
             QMessageBox.critical(self, "Ekspor Gagal", str(exc))
 
@@ -2523,6 +2831,11 @@ class MainWindow(QMainWindow):
         btn_reset.clicked.connect(self._on_explorer_reset)
         filter_row.addWidget(btn_reset)
         ll.addLayout(filter_row)
+
+        self.lbl_exp_group_info = QLabel("Memuat daftar case...")
+        self.lbl_exp_group_info.setWordWrap(True)
+        self.lbl_exp_group_info.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 12px;")
+        ll.addWidget(self.lbl_exp_group_info)
 
         self.table_exp_cases = QTableView()
         self.table_exp_cases.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -2576,24 +2889,33 @@ class MainWindow(QMainWindow):
             return
         idx = self.cmb_exp_group.currentIndex()
         b = self.bundle
+        total = b.overview.total_cases
 
         if idx == 0:
             df = b.overview.case_table
+            info = f"Menampilkan {fmt_int(len(df))} dari {fmt_int(total)} case (100,00%)"
         elif idx == 1:
             df = b.ex117.sub_c.case_df
+            info = f"11.7 C (Contains O_Accepted): {fmt_int(len(df))} dari {fmt_int(total)} case ({fmt_num(b.ex117.sub_c.case_percentage, self.f02_precision)}%)"
         elif idx == 2:
             df = b.ex117.sub_d.case_df
+            info = f"11.7 D (Contains O_Refused): {fmt_int(len(df))} dari {fmt_int(total)} case ({fmt_num(b.ex117.sub_d.case_percentage, self.f02_precision)}%)"
         elif idx == 3:
             df = b.ex117.sub_e.case_df
+            info = f"11.7 E (Endpoint O_Cancelled): {fmt_int(len(df))} dari {fmt_int(total)} case ({fmt_num(b.ex117.sub_e.case_percentage, self.f02_precision)}%)"
         elif idx == 4:
             df = b.ex1115.case_summary_df
+            info = f"11.15 (Fraud >= 2x complete): {fmt_int(len(df))} dari {fmt_int(total)} case ({fmt_num(b.ex1115.matching_percentage, self.f02_precision)}%)"
         elif idx == 5:
             df = b.ex1118.case_resource_summary_df
+            info = f"11.18 (Resource sama): {fmt_int(b.ex1118.matching_case_count)} dari {fmt_int(total)} case ({fmt_num(b.ex1118.matching_percentage, self.f02_precision)}%)"
         else:
             df = b.ex1122.case_summary_df
+            info = f"11.22 (O_Cancelled -> O_Accepted): {fmt_int(len(df))} dari {fmt_int(total)} case ({fmt_num(b.ex1122.matching_percentage, self.f02_precision)}%)"
 
+        self.lbl_exp_group_info.setText(info)
         self._exp_current_df = df
-        self._populate_explorer_case_list(df)
+        self._apply_explorer_filter()
 
     def _apply_explorer_filter(self) -> None:
         self._on_explorer_filter(self.exp_search.text())
@@ -2617,23 +2939,32 @@ class MainWindow(QMainWindow):
 
     def _populate_explorer_case_list(self, df: pd.DataFrame) -> None:
         headers = ["Case ID", "Event", "Lolos di"]
-        tags_map = getattr(self, "_case_category_tags", {})
+        tags_map = self.bundle.case_category_tags if self.bundle else getattr(self, "_case_category_tags", {})
         cids = df["case_id"].astype(str).tolist() if not df.empty else []
-        if "event_count" in df.columns:
-            ecnts = df["event_count"].tolist()
-        elif "complete_occurrences" in df.columns:
-            ecnts = df["complete_occurrences"].tolist()
+        if df.empty:
+            ecnts: Sequence[Any] = []
+        elif "event_count" in df.columns:
+            ecnts = df["event_count"].to_numpy()
+        elif "case_total_events" in df.columns:
+            ecnts = df["case_total_events"].to_numpy()
+        elif self.bundle is not None and not self.bundle.overview.case_table.empty:
+            ev_map = self.bundle.overview.case_table["event_count"]
+            ecnts = [int(ev_map.get(cid, 0)) if cid in ev_map.index else "—" for cid in cids]
         else:
             ecnts = ["—"] * len(cids)
 
-        rows = [
-            [format_case_id_middle(cid, max_len=40), str(ecnt), tags_map.get(cid, "—")]
-            for cid, ecnt in zip(cids, ecnts)
-        ]
-        tooltips = {(i, 0): cid for i, cid in enumerate(cids)}
-
         self._exp_raw_cids = cids
-        model = Simple3ColTableModel(headers, rows, self, tooltips=tooltips)
+        model = VirtualColumnTableModel(
+            headers,
+            [cids, ecnts, cids],
+            formatters=[
+                None,
+                None,
+                lambda cid: tags_map.get(str(cid), "—"),
+            ],
+            tooltips_col0=cids,
+            parent=self,
+        )
         self.table_exp_cases.setModel(model)
         # Interactive fixed widths keep 31.509+ rows instantaneous without freezing UI
         hh = self.table_exp_cases.horizontalHeader()
@@ -2646,6 +2977,11 @@ class MainWindow(QMainWindow):
         if cids:
             self.table_exp_cases.selectRow(0)
             self._display_explorer_case_events(cids[0])
+        else:
+            self.lbl_exp_summary.setText("Tidak ada case yang cocok dengan filter.")
+            self.lbl_exp_flow.setText("—")
+            self._current_exp_ev_df = pd.DataFrame()
+            self.table_exp_events.setModel(Simple3ColTableModel(["Waktu", "Aktivitas", "Resource"], [], self))
 
     def _on_exp_case_clicked(self, idx: QModelIndex) -> None:
         if not idx.isValid() or not hasattr(self, "_exp_raw_cids"):
@@ -2699,14 +3035,8 @@ class MainWindow(QMainWindow):
 
         rows: List[List[Any]] = []
         subtexts: Dict[Tuple[int, int], str] = {}
-        for idx_r, r in enumerate(df.itertuples(index=False)):
-            ts_str = format_timestamp_compact(str(getattr(r, "_2", "—") if hasattr(r, "_2") else "—"))
-            # Use safe column lookup via df row dict if needed; itertuples renames colons
-            rows.append([])
-
-        # Clean dict-based fast iteration preserving exact column names with colons
-        rows = []
-        for idx_r, rec in enumerate(df.to_dict(orient="records")):
+        ev_list = df.to_dict(orient="records")
+        for idx_r, rec in enumerate(ev_list):
             ts_str = format_timestamp_compact(str(rec.get("time:timestamp", "—")))
             act = str(rec.get("concept:name", "—"))
             lc_raw = rec.get("lifecycle:transition", "")
@@ -2717,19 +3047,33 @@ class MainWindow(QMainWindow):
             res_raw = rec.get("org:resource", "")
             res = "—" if pd.isna(res_raw) or not str(res_raw).strip() else str(res_raw).strip()
             if show_detail:
-                off = str(rec.get("OfferID", "—") or "—")
-                eid = str(rec.get("EventID", "—") or "—")
+                off_raw = rec.get("OfferID", "")
+                off = "—" if pd.isna(off_raw) or not str(off_raw).strip() else str(off_raw).strip()
+                eid_raw = rec.get("EventID", "")
+                eid = "—" if pd.isna(eid_raw) or not str(eid_raw).strip() else str(eid_raw).strip()
                 rows.append([ts_str, act, res, off, eid])
             else:
                 rows.append([ts_str, act, res])
 
-        model = Simple3ColTableModel(headers, rows, self, subtexts=subtexts)
+        group_code_map = {1: "11.7 C", 2: "11.7 D", 3: "11.7 E", 4: "11.15", 5: "11.18", 6: "11.22"}
+        code = group_code_map.get(self.cmb_exp_group.currentIndex(), "")
+        has_lc = self.bundle.report.has_lifecycle if self.bundle else True
+        hl_rows = set(self._compute_highlight_indices(ev_list, code, has_lifecycle=has_lc)) if code else set()
+
+        model = Simple3ColTableModel(headers, rows, self, subtexts=subtexts, highlight_rows=hl_rows)
         self.table_exp_events.setModel(model)
         self.table_exp_events.verticalHeader().setDefaultSectionSize(44 if subtexts else 32)
         self.table_exp_events.resizeRowsToContents()
         hh = self.table_exp_events.horizontalHeader()
-        hh.setSectionResizeMode(QHeaderView.ResizeToContents)
-        hh.setStretchLastSection(True)
+        hh.setSectionResizeMode(QHeaderView.Interactive)
+        self.table_exp_events.setColumnWidth(0, 145)
+        self.table_exp_events.setColumnWidth(1, 240)
+        if show_detail:
+            self.table_exp_events.setColumnWidth(2, 110)
+            self.table_exp_events.setColumnWidth(3, 140)
+            hh.setSectionResizeMode(4, QHeaderView.Stretch)
+        else:
+            hh.setSectionResizeMode(2, QHeaderView.Stretch)
 
     def _select_case_in_explorer(self, case_id: str) -> None:
         self._set_active_tab(4)  # Switch to Case Explorer
@@ -2807,18 +3151,25 @@ class MainWindow(QMainWindow):
             self.start_analysis(path)
 
     def on_load_bpic17(self) -> None:
-        for cand in (
+        proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        rel_candidates = (
+            "data/BPI Challenge 2017.xes.gz",
+            "BPI Challenge 2017.xes.gz",
             "data/BPI_Challenge_2017.xes.gz",
             "BPI_Challenge_2017.xes.gz",
-            "data/BPI Challenge 2017.xes.gz",
-        ):
-            if os.path.exists(cand):
-                self.start_analysis(cand)
-                return
+            "data/BPI Challenge 2017.xes",
+            "BPI Challenge 2017.xes",
+        )
+        for base_dir in (os.getcwd(), proj_root):
+            for rel in rel_candidates:
+                cand = os.path.join(base_dir, rel)
+                if os.path.exists(cand):
+                    self.start_analysis(cand)
+                    return
         QMessageBox.warning(
             self,
             "Berkas BPIC17 Tidak Ditemukan",
-            "Unduh dataset BPI Challenge 2017 (.xes.gz) dan letakkan di folder data/",
+            "Unduh dataset BPI Challenge 2017 (.xes.gz) dan letakkan di folder proyek atau data/.",
         )
 
     def on_load_synthetic_log(self) -> None:
@@ -2835,12 +3186,18 @@ class MainWindow(QMainWindow):
         self.start_analysis(self.bundle.report.file_path, existing_context=self.bundle.context)
 
     def start_analysis(self, file_path: str, existing_context: Optional[EventLogContext] = None) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            return
+
         self.lbl_header_file.setText(os.path.basename(file_path))
         self.badge_status.set_status("busy", "Memuat...")
         self.pbar_load.setValue(5)
         self.lbl_load_time.setText("Membaca XES...")
         self.box_error.setVisible(False)
-        self.status_bar.showMessage("Siap.")
+        self.box_warnings.setVisible(False)
+        self.btn_ganti_data.setEnabled(False)
+        self.btn_ekspor.setEnabled(False)
+        self.status_bar.showMessage("Memuat dan menganalisis event log...")
 
         self.worker = AnalysisWorker(file_path=file_path, existing_context=existing_context)
         self.worker.progress_changed.connect(self._on_analysis_progress)
@@ -2853,14 +3210,19 @@ class MainWindow(QMainWindow):
         self.lbl_load_time.setText(msg)
 
     def _on_analysis_failed(self, err_msg: str) -> None:
+        self.btn_ganti_data.setEnabled(True)
+        self.btn_ekspor.setEnabled(self.bundle is not None)
         self.badge_status.set_status("failed", "✕ Gagal")
         self.pbar_load.setValue(0)
         self.lbl_load_time.setText("Gagal memuat berkas.")
         self.box_error.setVisible(True)
         self.lbl_err_msg.setText(err_msg)
+        self.status_bar.showMessage("Gagal memuat berkas XES.")
         QMessageBox.critical(self, "Kesalahan Impor / Validasi XES", err_msg)
 
     def _on_analysis_finished(self, bundle: FullAnalysisBundle) -> None:
+        self.btn_ganti_data.setEnabled(True)
+        self.btn_ekspor.setEnabled(True)
         self.bundle = bundle
         rep = bundle.report
         ov = bundle.overview
@@ -2871,32 +3233,18 @@ class MainWindow(QMainWindow):
         self.lbl_header_file.setText(rep.file_name)
         self.status_bar.showMessage("Siap.")
 
-        # Precompute "Lolos di" tags per case_id in O(N)
-        c_set = set(bundle.ex117.sub_c.case_df["case_id"].astype(str)) if not bundle.ex117.sub_c.case_df.empty else set()
-        d_set = set(bundle.ex117.sub_d.case_df["case_id"].astype(str)) if not bundle.ex117.sub_d.case_df.empty else set()
-        e_set = set(bundle.ex117.sub_e.case_df["case_id"].astype(str)) if not bundle.ex117.sub_e.case_df.empty else set()
-        s15_set = set(bundle.ex1115.case_summary_df["case_id"].astype(str)) if not bundle.ex1115.case_summary_df.empty else set()
-        s18_set = set(bundle.ex1118.case_resource_summary_df["case_id"].astype(str)) if not bundle.ex1118.case_resource_summary_df.empty else set()
-        s22_set = set(bundle.ex1122.case_summary_df["case_id"].astype(str)) if not bundle.ex1122.case_summary_df.empty else set()
+        if rep.warnings:
+            self.lbl_warnings_msg.setText("Peringatan validasi: " + " | ".join(rep.warnings))
+            self.box_warnings.setVisible(True)
+        else:
+            self.box_warnings.setVisible(False)
 
-        tags_map: Dict[str, str] = {}
-        for cid in ov.case_table["case_id"].astype(str).tolist():
-            t = []
-            if cid in c_set:
-                t.append("C")
-            if cid in d_set:
-                t.append("D")
-            if cid in e_set:
-                t.append("E")
-            if cid in s15_set:
-                t.append("15")
-            if cid in s18_set:
-                t.append("18")
-            if cid in s22_set:
-                t.append("22")
-            if t:
-                tags_map[cid] = ", ".join(t)
-        self._case_category_tags = tags_map
+        if bundle.case_category_tags:
+            self._case_category_tags = bundle.case_category_tags
+        else:
+            self._case_category_tags = _compute_case_category_tags(
+                ov, bundle.ex117, bundle.ex1115, bundle.ex1118, bundle.ex1122
+            )
 
         # 1. Update Tab Data
         self.card_cases.set_content(fmt_int(rep.total_cases), label="Case")
@@ -2919,6 +3267,8 @@ class MainWindow(QMainWindow):
             item = self.box_act_bars.takeAt(0)
             w = item.widget()
             if w:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
 
         top5 = ov.activity_table.head(5)
@@ -2934,6 +3284,8 @@ class MainWindow(QMainWindow):
             item = self.box_lc_bars.takeAt(0)
             w = item.widget()
             if w:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
 
         if ov.lifecycle_counts:
@@ -2962,7 +3314,17 @@ class MainWindow(QMainWindow):
 
         # 4. Update Checklist Drawer
         is_syn = "synthetic" in rep.file_name.lower()
-        self.drawer.update_states(has_data=True, has_analysis=True, is_synthetic=is_syn, exported=self.has_exported)
+        if is_syn:
+            self.seen_synthetic = True
+        else:
+            self.seen_bpic17 = True
+        self.drawer.update_states(
+            has_data=True,
+            has_analysis=True,
+            is_bpic17=self.seen_bpic17,
+            is_synthetic=self.seen_synthetic,
+            exported=self.has_exported,
+        )
         self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
 
     def _refresh_all_numbers_precision(self) -> None:
@@ -3040,7 +3402,13 @@ class MainWindow(QMainWindow):
                 )
                 sum_df.to_csv(path, index=False, encoding="utf-8-sig")
                 self.has_exported = True
-                self.drawer.update_states(has_data=True, has_analysis=True, exported=True)
+                self.drawer.update_states(
+                    has_data=True,
+                    has_analysis=True,
+                    is_bpic17=self.seen_bpic17,
+                    is_synthetic=self.seen_synthetic,
+                    exported=True,
+                )
                 self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
                 QMessageBox.information(self, "Ekspor Berhasil", f"Ringkasan jawaban disimpan ke:\n{path}")
 
@@ -3052,7 +3420,13 @@ class MainWindow(QMainWindow):
                     out_dir, b.context, b.overview, b.ex117, b.ex1115, b.ex1118, b.ex1122
                 )
                 self.has_exported = True
-                self.drawer.update_states(has_data=True, has_analysis=True, exported=True)
+                self.drawer.update_states(
+                    has_data=True,
+                    has_analysis=True,
+                    is_bpic17=self.seen_bpic17,
+                    is_synthetic=self.seen_synthetic,
+                    exported=True,
+                )
                 self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
                 QMessageBox.information(self, "Ekspor Berhasil", f"Daftar case disimpan ke folder:\n{out_dir}")
 
@@ -3071,6 +3445,12 @@ class MainWindow(QMainWindow):
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(html_txt)
                 self.has_exported = True
-                self.drawer.update_states(has_data=True, has_analysis=True, exported=True)
+                self.drawer.update_states(
+                    has_data=True,
+                    has_analysis=True,
+                    is_bpic17=self.seen_bpic17,
+                    is_synthetic=self.seen_synthetic,
+                    exported=True,
+                )
                 self.btn_checklist_chip.setText(f"Checklist {self.drawer.get_progress_text()}")
                 QMessageBox.information(self, "Ekspor Berhasil", f"Laporan HTML disimpan ke:\n{path}")

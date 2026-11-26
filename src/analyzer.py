@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from .core import INVALID_RESOURCE_STRINGS, EventLogContext, is_valid_activity, is_valid_resource
@@ -105,6 +106,7 @@ class Exercise1115Result:
     case_summary_df: pd.DataFrame
     evidence_events_df: pd.DataFrame
     excluded_case_ids: List[str] = field(default_factory=list)
+    excluded_summary_df: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 @dataclass
@@ -147,7 +149,7 @@ def analyze_overview(ctx: EventLogContext) -> OverviewResult:
 
     total_cases = len(cs)
     total_events = len(df)
-    
+
     # Filter valid activities consistently with valid resources
     unique_acts = sum(1 for v in df["concept:name"].dropna().unique() if is_valid_activity(v))
 
@@ -189,12 +191,15 @@ def analyze_overview(ctx: EventLogContext) -> OverviewResult:
     if pd.isna(slow_mean):
         slow_mean = 0.0
 
-    if "lifecycle:transition" in df.columns and not df.empty:
-        lc_series = df["lifecycle:transition"].dropna().astype(str).str.strip().str.lower()
-        lc_vc = lc_series[lc_series != ""].value_counts()
-        lc_counts = {str(k): int(v) for k, v in lc_vc.items()}
-    else:
-        lc_counts = {}
+    lc_counts: Dict[str, int] = {}
+    if ctx.report.has_lifecycle and "lifecycle:transition" in df.columns and not df.empty:
+        vc = df["lifecycle:transition"].value_counts(dropna=True)
+        agg: Dict[str, int] = {}
+        for k, v in vc.items():
+            clean_k = str(k).strip().lower()
+            if clean_k not in {"", "nan", "none", "null", "undefined"}:
+                agg[clean_k] = agg.get(clean_k, 0) + int(v)
+        lc_counts = dict(sorted(agg.items(), key=lambda kv: kv[1], reverse=True))
 
     return OverviewResult(
         total_cases=total_cases,
@@ -263,8 +268,8 @@ def _make_subquestion_117(
 def analyze_exercise_11_7(ctx: EventLogContext) -> Exercise117Result:
     """F03 — Computes answers and case evidence for Exercise 11.7 (A-E).
 
-    Uses PM4Py trace attribute filtering semantics while preserving full trace
-    cycle time computed before any event removal (Section 7.1).
+    Operates on the PM4Py-parsed event log DataFrame using case-level trace filtering
+    semantics while preserving full trace cycle time computed before any event removal (Section 7.1).
     """
     df = ctx.df
     cs = ctx.case_summary_df
@@ -325,7 +330,6 @@ def analyze_exercise_11_7(ctx: EventLogContext) -> Exercise117Result:
     )
 
     # 11.7 E: Canceled cases -> LAST event in trace is O_Cancelled
-    # Guarantee exact trace-order endpoint consistency (Section 4 & 7.1: "Event TERAKHIR pada urutan trace"):
     cs_e = cs[cs["last_activity"] == "O_Cancelled"].copy()
     e_occurrences = df.loc[df[act_col] == "O_Cancelled"].groupby(case_col, sort=False).size()
     cs_e["trigger_activity"] = "O_Cancelled (Endpoint)"
@@ -389,7 +393,7 @@ def analyze_exercise_11_15(
     all_lc_counts = act_events.groupby(case_col, sort=False).size()
     cases_two_all_lc = all_lc_counts[all_lc_counts >= min_occurrences].index.tolist()
 
-    has_lc = lc_col in df.columns
+    has_lc = ctx.report.has_lifecycle and (lc_col in df.columns)
     if complete_only and has_lc:
         comp_events = act_events[act_events[lc_col].astype(str).str.strip().str.lower() == "complete"].copy()
         lc_label = "lifecycle:transition == 'complete'"
@@ -409,6 +413,15 @@ def analyze_exercise_11_15(
         example_excl_df = act_events[act_events[case_col] == example_excl_id].copy()
     else:
         example_excl_df = pd.DataFrame()
+
+    if excluded_ids:
+        excluded_summary_df = pd.DataFrame({
+            "case_id": [str(cid) for cid in excluded_ids],
+            "complete_occurrences": [int(comp_counts.get(cid, 0)) for cid in excluded_ids],
+            "all_lifecycle_occurrences": [int(all_lc_counts.get(cid, 0)) for cid in excluded_ids],
+        })
+    else:
+        excluded_summary_df = pd.DataFrame(columns=["case_id", "complete_occurrences", "all_lifecycle_occurrences"])
 
     # Build summary table per qualifying case
     summary_rows = []
@@ -460,6 +473,7 @@ def analyze_exercise_11_15(
         case_summary_df=case_summary_df,
         evidence_events_df=evidence_df,
         excluded_case_ids=[str(x) for x in excluded_ids],
+        excluded_summary_df=excluded_summary_df,
     )
 
 
@@ -487,17 +501,29 @@ def analyze_exercise_11_18(
     lc_col = "lifecycle:transition"
     res_col = "org:resource"
 
-    if res_col not in df.columns:
+    cases_1115_ids = (
+        res_1115.case_summary_df["case_id"].astype(str).tolist()
+        if not res_1115.case_summary_df.empty
+        else []
+    )
+
+    if not ctx.report.has_resource or res_col not in df.columns:
+        diff_res_cases = sorted(cases_1115_ids)
+        diff_ev_df = (
+            res_1115.evidence_events_df[res_1115.evidence_events_df[case_col].isin(diff_res_cases)].copy()
+            if (diff_res_cases and not res_1115.evidence_events_df.empty)
+            else pd.DataFrame()
+        )
         return Exercise1118Result(
             target_activity=target_activity,
             min_occurrences=min_occurrences,
             lifecycle_filter=res_1115.lifecycle_filter,
-            rule_description="Atribut org:resource tidak tersedia pada dataset.",
+            rule_description="Atribut org:resource tidak tersedia atau seluruhnya kosong/tidak valid pada dataset.",
             matching_case_count=0,
             total_cases_denominator=total_cases,
             matching_percentage=0.0,
-            cases_from_1115_excluded_diff_resource=[],
-            excluded_diff_resource_evidence_df=pd.DataFrame(),
+            cases_from_1115_excluded_diff_resource=diff_res_cases,
+            excluded_diff_resource_evidence_df=diff_ev_df,
             case_resource_summary_df=pd.DataFrame(),
             evidence_events_df=pd.DataFrame(),
         )
@@ -508,7 +534,8 @@ def analyze_exercise_11_18(
         if str(v).strip().lower() == target_lower
     ]
     act_events = df[df[act_col].isin(matching_acts)].copy()
-    if complete_only and (lc_col in df.columns):
+    has_lc = ctx.report.has_lifecycle and (lc_col in df.columns)
+    if complete_only and has_lc:
         comp_events = act_events[act_events[lc_col].astype(str).str.strip().str.lower() == "complete"].copy()
     else:
         comp_events = act_events.copy()
@@ -557,11 +584,6 @@ def analyze_exercise_11_18(
     evidence_df = valid_comp_events.loc[sorted(list(set(evidence_indices)))].drop(columns=["_clean_resource"], errors="ignore")
 
     # Identify cases that passed 11.15 (>=2 complete) but failed 11.18 (different resources or empty resources)
-    cases_1115_ids = (
-        res_1115.case_summary_df["case_id"].tolist()
-        if not res_1115.case_summary_df.empty
-        else []
-    )
     diff_res_cases = sorted(list(set(cases_1115_ids) - set(qualifying_case_ids)))
     diff_res_evidence_df = comp_events[comp_events[case_col].isin(diff_res_cases)].copy()
 
@@ -604,67 +626,88 @@ def analyze_exercise_11_22(
     case_col = "case:concept:name"
     act_col = "concept:name"
 
-    sub = df[df[act_col].isin([first_activity, second_activity])].copy()
+    sub = df[df[act_col].isin([first_activity, second_activity])]
     first_ev = sub[sub[act_col] == first_activity]
     second_ev = sub[sub[act_col] == second_activity]
 
     # Earliest occurrence of first_activity per case, and latest occurrence of second_activity per case
-    min_first_idx = first_ev.groupby(case_col, sort=False)["_trace_pos"].min()
-    max_second_idx = second_ev.groupby(case_col, sort=False)["_trace_pos"].max()
+    first_qual_all = first_ev.groupby(case_col, sort=False).first()
+    second_qual_all = second_ev.groupby(case_col, sort=False).last()
 
-    common_cases = min_first_idx.index.intersection(max_second_idx.index)
-    valid_mask = min_first_idx.loc[common_cases] < max_second_idx.loc[common_cases]
-
-    qualifying_cases = common_cases[valid_mask].tolist()
-    reverse_only_cases = common_cases[~valid_mask].tolist()
-
-    # Build detailed pair evidence for each qualifying case
-    qual_sub = sub[sub[case_col].isin(qualifying_cases)].copy()
-
-    first_qual = first_ev[first_ev[case_col].isin(qualifying_cases)].groupby(case_col, sort=False).first()
-    second_qual = second_ev[second_ev[case_col].isin(qualifying_cases)].groupby(case_col, sort=False).last()
+    common_cases = first_qual_all.index.intersection(second_qual_all.index)
+    if len(common_cases) > 0:
+        valid_mask = first_qual_all.loc[common_cases, "_trace_pos"] < second_qual_all.loc[common_cases, "_trace_pos"]
+        qualifying_cases = common_cases[valid_mask].tolist()
+        reverse_only_cases = common_cases[~valid_mask].tolist()
+    else:
+        qualifying_cases = []
+        reverse_only_cases = []
 
     has_offer = "OfferID" in df.columns
-    summary_rows = []
-    for cid in qualifying_cases:
-        f_row = first_qual.loc[cid]
-        s_row = second_qual.loc[cid]
-        f_pos = int(f_row["_trace_pos"])
-        s_pos = int(s_row["_trace_pos"])
-        f_ts = f_row["time:timestamp"]
-        s_ts = s_row["time:timestamp"]
-        gap_events = s_pos - f_pos - 1
-        gap_days = (s_ts - f_ts).total_seconds() / 86400.0
-        f_offer = str(f_row["OfferID"]) if (has_offer and pd.notna(f_row.get("OfferID"))) else "-"
-        s_offer = str(s_row["OfferID"]) if (has_offer and pd.notna(s_row.get("OfferID"))) else "-"
-        last_act = str(cs.loc[cid, "last_activity"]) if cid in cs.index else "-"
-        dur_days = float(cs.loc[cid, "duration_days"]) if cid in cs.index else 0.0
+    if qualifying_cases:
+        qual_sub = sub[sub[case_col].isin(qualifying_cases)].copy()
+        f_df = first_qual_all.loc[qualifying_cases]
+        s_df = second_qual_all.loc[qualifying_cases]
+        c_df = cs.reindex(qualifying_cases)
 
-        summary_rows.append({
-            "case_id": str(cid),
+        f_pos = f_df["_trace_pos"].to_numpy(dtype=np.int64)
+        s_pos = s_df["_trace_pos"].to_numpy(dtype=np.int64)
+        f_ts_series = f_df["time:timestamp"].reset_index(drop=True)
+        s_ts_series = s_df["time:timestamp"].reset_index(drop=True)
+        gap_events = (s_pos - f_pos - 1).astype(np.int64)
+        gap_days = (s_ts_series - f_ts_series).dt.total_seconds().to_numpy() / 86400.0
+
+        if has_offer:
+            f_offer = f_df["OfferID"].where(f_df["OfferID"].notna(), "-").astype(str).to_numpy()
+            s_offer = s_df["OfferID"].where(s_df["OfferID"].notna(), "-").astype(str).to_numpy()
+        else:
+            f_offer = np.full(len(qualifying_cases), "-", dtype=object)
+            s_offer = np.full(len(qualifying_cases), "-", dtype=object)
+
+        last_acts = c_df["last_activity"].fillna("-").astype(str).to_numpy()
+        dur_days = c_df["duration_days"].fillna(0.0).to_numpy(dtype=float)
+
+        case_summary_df = pd.DataFrame({
+            "case_id": [str(cid) for cid in qualifying_cases],
             "cancelled_trace_pos": f_pos,
-            "cancelled_timestamp": str(f_ts),
+            "cancelled_timestamp": f_ts_series.astype(str).to_numpy(),
             "cancelled_offer_id": f_offer,
             "accepted_trace_pos": s_pos,
-            "accepted_timestamp": str(s_ts),
+            "accepted_timestamp": s_ts_series.astype(str).to_numpy(),
             "accepted_offer_id": s_offer,
             "intervening_events_count": gap_events,
             "time_between_days": gap_days,
-            "trace_end_activity": last_act,
+            "trace_end_activity": last_acts,
             "case_duration_days": dur_days,
         })
-
-    case_summary_df = pd.DataFrame(summary_rows)
+    else:
+        qual_sub = sub.iloc[0:0].copy()
+        case_summary_df = pd.DataFrame(columns=[
+            "case_id",
+            "cancelled_trace_pos",
+            "cancelled_timestamp",
+            "cancelled_offer_id",
+            "accepted_trace_pos",
+            "accepted_timestamp",
+            "accepted_offer_id",
+            "intervening_events_count",
+            "time_between_days",
+            "trace_end_activity",
+            "case_duration_days",
+        ])
 
     # Section 7.3 additional check: Offer-ID level analysis (labelled separately)
     same_offer_count = 0
-    if has_offer:
+    if has_offer and not sub.empty:
         sub_offer = sub.dropna(subset=["OfferID"])
-        f_off = sub_offer[sub_offer[act_col] == first_activity].groupby([case_col, "OfferID"])["_trace_pos"].min()
-        s_off = sub_offer[sub_offer[act_col] == second_activity].groupby([case_col, "OfferID"])["_trace_pos"].max()
-        comm_off = f_off.index.intersection(s_off.index)
-        valid_off = comm_off[f_off.loc[comm_off] < s_off.loc[comm_off]]
-        same_offer_count = int(valid_off.get_level_values(0).nunique())
+        sub_offer = sub_offer[sub_offer["OfferID"].astype(str).str.strip() != ""]
+        if not sub_offer.empty:
+            f_off = sub_offer[sub_offer[act_col] == first_activity].groupby([case_col, "OfferID"], sort=False)["_trace_pos"].min()
+            s_off = sub_offer[sub_offer[act_col] == second_activity].groupby([case_col, "OfferID"], sort=False)["_trace_pos"].max()
+            comm_off = f_off.index.intersection(s_off.index)
+            if len(comm_off) > 0:
+                valid_off = comm_off[f_off.loc[comm_off] < s_off.loc[comm_off]]
+                same_offer_count = int(valid_off.get_level_values(0).nunique())
 
     pct = (len(qualifying_cases) / total_cases * 100.0) if total_cases > 0 else 0.0
     rule_desc = (
@@ -685,4 +728,5 @@ def analyze_exercise_11_22(
         same_offer_id_matching_count=same_offer_count,
         case_summary_df=case_summary_df,
         evidence_events_df=qual_sub,
+        excluded_case_ids=[str(x) for x in reverse_only_cases],
     )
